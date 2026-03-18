@@ -1,37 +1,47 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `index.tsx` holds the main React UI and state; `index.css`, `i18n.ts`, and `supabaseClient.ts` provide shared client setup.
-- `api/` houses Vercel functions. `api/chat.ts` powers search/chat, and `api/admin/*.ts` backs admin endpoints. Filenames map directly to deployed routes.
-- `supabase/init.sql` defines profiles, chats, app settings, and RPCs. Flag data-impacting SQL changes in PRs.
-- Root config and shell files include `index.html`, `metadata.json`, `vite.config.ts`, and `tsconfig.json`.
+- `index.tsx` is now a **minimal Appwrite-backed frontend shell** for auth, chat history, user settings, and simple prompt testing.
+- `api/chat.ts` is a **thin OpenAI-compatible proxy**. It accepts request-time provider configuration and user API keys, but must not persist those keys.
+- `src/lib/appwrite/*` contains Appwrite config/models/client helpers.
+- `src/lib/repositories/*` contains backend-agnostic repository interfaces plus the current Appwrite implementations.
+- `src/lib/pipeline/*` contains the local knowledge-base pipeline: SQLite storage, BOOTH adapters, image caching/compression, normalization, enrichment, embeddings, and retrieval helpers.
+- `scripts/sync/*` and `scripts/knowledge/*` are the primary Phase 1 execution surface. Prefer these local scripts over adding cloud workers.
+- `data/` is local pipeline output (SQLite DBs, cached images, smoke-test artifacts) and should stay ignored.
+- `docs/superpowers/*` holds the approved Phase 1 local-first spec/plan.
 
 ## Build, Test, and Development Commands
 - `npm install` — install dependencies.
-- `npx vercel dev` — run the full app locally, including `api/`. Use this for end-to-end verification.
 - `npm run dev` — start the Vite frontend only.
-- `npm run build` — create the production bundle and catch TypeScript/Vite regressions.
-- `npm run preview` — preview the built frontend locally.
+- `npx vercel dev` — run the full app locally when `/api/chat` must be exercised end-to-end.
+- `npm test` — run the current Node/TS test suite.
+- `npx tsc --noEmit` — run type-check verification.
+- `npm run build` — build the frontend bundle.
+- `npm run appwrite:bootstrap` — create/verify Appwrite collections and attributes.
+- `npm run sync:run` — manually crawl BOOTH 3D Models into the local SQLite + image cache pipeline and optionally publish compact catalog data to Appwrite.
+- `npm run knowledge:caption|ocr|extract|embed-text|embed-images|test-retrieval` — run local Phase 1B/1C stages.
 
 ## Coding Style & Naming Conventions
 - Use TypeScript with 2-space indentation, semicolons, and ES module imports.
-- Follow the current naming pattern: `PascalCase` for components and types, `camelCase` for functions and variables, and route-aligned files such as `api/admin/users.ts`.
-- Keep helpers near the feature that owns them; avoid drive-by refactors.
-- No formatter or linter is configured, so match the surrounding file style closely.
+- Use `PascalCase` for React components and class-like types, `camelCase` for functions/variables, and route-aligned filenames for API handlers.
+- Keep Appwrite access behind repository abstractions; do not scatter direct SDK calls through unrelated code.
+- Keep Phase 1 logic split between `repositories/` (hosted data) and `pipeline/` (local knowledge-base work).
 
 ## Testing Guidelines
-- No automated test suite is configured yet. Minimum verification: `npm run build` and a manual smoke test in `npx vercel dev`.
-- For chat/search changes, verify Booth search, session persistence, and error handling. For admin or database changes, retest relevant Supabase-backed flows.
-- If you add tests, use `*.test.ts` or `*.test.tsx` names and add the script to `package.json`.
+- The baseline verification suite is now: `npm test`, `npx tsc --noEmit`, and `npm run build`.
+- For pipeline changes, also run at least one local smoke flow through `sync:run` and the relevant `knowledge:*` scripts.
+- Favor focused `*.test.ts` files near the owning module.
+- When a stage is local-first by design, local script validation counts as first-class verification.
 
 ## Commit & Pull Request Guidelines
-- Follow the existing history: `feat: ...`, `fix(api/chat): ...`, `refactor(search): ...`. Use Conventional Commits with optional scopes.
-- PRs should include the purpose, touched areas (`frontend`, `api`, `supabase`), env or SQL changes, and UI screenshots or GIFs when relevant.
-- Link related issues when available, and call out any new environment variables or `supabase/init.sql` changes explicitly.
+- Use Conventional Commits (for example `feat: ...`, `fix(api/chat): ...`, `refactor(pipeline): ...`).
+- PRs should call out changes across `frontend`, `api`, `appwrite`, and `pipeline` explicitly.
+- Mention new environment variables, new local script usage, and any Appwrite bootstrap requirements.
 
 ## Security & Configuration Tips
-- Keep secrets in `.env.local` or Vercel project settings only. Never expose `SUPABASE_SERVICE_ROLE_KEY` or model keys to the client.
-- Exercise admin APIs through authenticated flows; they depend on server-side credentials and forwarded access tokens.
+- Keep `APPWRITE_API_KEY` server-side only. Never expose it to the browser.
+- User-supplied LLM API keys must remain **browser-local by default**. They may be sent request-time to `/api/chat`, but must not be persisted in Appwrite.
+- Treat local SQLite DBs and cached images as knowledge-base assets; keep them out of the repo and back them up separately if needed.
 
 ## Product Direction & Long-Term Roadmap (2026-03-18)
 
@@ -193,3 +203,87 @@ Expected outcome:
 - Favor outputs that help human review: grouped candidates, confidence hints, and similarity explanations.
 - Avoid overstating certainty in UI or API responses. Use wording like "possible materials", "likely candidates", or "may match" when appropriate.
 
+## Operational Scope Preference (2026-03-19)
+
+- Treat Booth-Hunter as a practical, low-cost tool first, not a product-grade SaaS, unless the user explicitly changes that goal.
+- Prefer the simplest workable architecture that preserves the reverse-search roadmap: managed auth/database is acceptable, but avoid adding product-grade control planes, job systems, or always-on infrastructure unless clearly necessary.
+- For cloud deployment, prefer free or very low-cost platforms and keep the hosted surface area small.
+- A valid target shape is: one managed auth/database backend plus lightweight static/frontend hosting and, only if needed, a very small API layer.
+- Prefer user-supplied LLM API credentials for inference costs. By default, avoid server-side persistence of third-party LLM API keys unless the user explicitly wants secure cross-device storage and accepts the added complexity.
+- If users need saved settings, prioritize storing non-secret provider configuration (provider/base URL/model/preferences) before introducing encrypted server-side secret storage.
+
+## Phase 1 Local-First Implementation State (2026-03-19)
+
+### Current status
+
+- **Phase 1A completed**
+- **Phase 1B completed**
+- **Phase 1C completed**
+
+### Completed verification snapshot
+
+- Local verification completed with:
+  - `npm test`
+  - `npx tsc --noEmit`
+  - `npm run build`
+  - `npm run sync:run`
+  - `npm run knowledge:caption`
+  - `npm run knowledge:ocr`
+  - `npm run knowledge:extract`
+  - `npm run knowledge:embed-text`
+  - `npm run knowledge:embed-images`
+  - `npm run knowledge:test-retrieval`
+- Real Appwrite verification also completed:
+  - `npm run appwrite:bootstrap`
+  - live `sync:run` publish smoke test against the configured Appwrite project
+  - direct Appwrite document listing confirmed catalog rows were created successfully
+
+### Phase 1 split
+
+Phase 1 is intentionally split into three local-first subphases:
+1. **Phase 1A — database and sync foundation**
+2. **Phase 1B — knowledge extraction foundation**
+3. **Phase 1C — embeddings and basic retrieval**
+
+### Durable architecture constraints
+
+- Phase 1 is **local-first**. Heavy crawl and knowledge-building steps run as local manual scripts.
+- Appwrite is the current hosted backend for:
+  - auth
+  - chat history
+  - user settings
+  - compact catalog projection
+- Appwrite access must stay behind repository/adapter abstractions so the project can migrate later.
+- `/api/chat` is intentionally thin and provider-agnostic. It accepts request-time provider config and user API keys but must not persist those keys.
+
+### Local data pipeline rules
+
+- Current ingest scope is:
+  - **BOOTH**
+  - **all items in the 3D Models category**
+- Raw crawl data and pipeline state live in **local SQLite**.
+- Cached image bodies live on the **local filesystem** and are compressed before storage.
+- Do not store images as base64 in database tables by default.
+
+### Current Phase 1 implementation choices
+
+- Phase 1A currently uses:
+  - `scripts/sync/run.ts`
+  - `src/lib/pipeline/sqlite/*`
+  - `src/lib/pipeline/images/*`
+  - `src/lib/pipeline/booth/adapter.ts`
+  - `src/lib/repositories/catalog/*`
+- Phase 1B currently uses:
+  - heuristic local captions by default
+  - Tesseract OCR (or `noop` mode for fast smoke tests)
+  - rule-based structured signal extraction
+- Phase 1C currently uses:
+  - `local-hash-v1` text embeddings
+  - `local-pixel-v1` image embeddings
+  - local retrieval validation scripts before any cloud rollout
+
+### Validation preference
+
+- During Phase 1, prioritize **database construction and validation scripts** over polished user interaction.
+- Favor verification that proves the local DB, local cache, and retrieval outputs are internally consistent.
+- Local smoke scripts are part of the required verification surface, not optional extras.

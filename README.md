@@ -1,162 +1,238 @@
 # Booth Hunter
 
-AI-powered VRChat 资产搜索助手（Booth.pm）。
+Booth Hunter 正在从单纯的 Booth 聊天搜索助手，演进为一个 **面向 VRChat 改模素材的多模态逆向检索工具**。
 
-本仓库包含：
+当前已完成的新 **Phase 1（local-first）** 基础包括：
 
-- 前端：Vite + React
-- 后端：Vercel Serverless Functions（`/api`）
-- 数据：Supabase（Auth + Postgres）
+- **Appwrite**：用户登录、聊天记录、用户设置、compact catalog 发布位
+- **本地 SQLite**：BOOTH raw crawl 备份与知识库中间状态
+- **本地图片缓存**：下载并压缩商品图片，供 OCR / embeddings / 后续知识库使用
+- **本地知识提取管线**：caption、OCR、structured extraction
+- **本地 embeddings 与检索验证**：text embeddings、image embeddings、basic retrieval smoke test
+- **薄 `/api/chat` 代理**：使用用户自己提供的 LLM API key；API key 只保存在浏览器本地，不落库
 
 ---
 
-## 功能概览
+## 当前架构
 
-- 多轮对话搜索：模型会根据结果自动调整关键词
-- Booth.pm 抓取：实时抓取商品信息（标题/价格/标签/链接/图片）
-- Supabase 登录与云端会话：保存/读取历史对话（chats）
-- ✅ 对话轮数统计与限制：
-  - 单会话轮数（每次用户点一次“发送”=1轮）
-  - 总轮数（跨所有会话累计）
-  - 支持管理员设置默认限制，以及对单个用户单独覆盖
+### 云端
+- Appwrite Auth
+- Appwrite Database
+- 前端 UI
+- `/api/chat` 薄代理
+
+### 本地
+- `data/raw/*.sqlite`：raw crawl 数据、normalized items、caption/OCR/structured data、embeddings
+- `data/images/`：压缩后的图片缓存
+- `scripts/sync/*`：手动同步 BOOTH 3D Models
+- `scripts/knowledge/*`：本地知识提取与检索验证
 
 ---
 
 ## 环境变量
 
-本地请放在 `.env.local`；部署到 Vercel 时配置到 Project Settings → Environment Variables。
+### 前端（Vite）
+放在 `.env.local`：
 
-### 必需
+```env
+VITE_APPWRITE_ENDPOINT=https://your-appwrite-endpoint/v1
+VITE_APPWRITE_PROJECT_ID=your_project_id
+VITE_APPWRITE_DATABASE_ID=booth_hunter
+VITE_APPWRITE_CHATS_COLLECTION_ID=booth_hunter_chats
+VITE_APPWRITE_CATALOG_COLLECTION_ID=booth_hunter_catalog
+```
 
-- `GEMINI_API_KEY`
-- `GEMINI_API_BASE_URL`（OpenAI-compatible，通常以 `/v1` 结尾）
-- `GEMINI_MODEL`
-- `SUPABASE_URL`
-- `SUPABASE_ANON_KEY`
+### Appwrite bootstrap / local publish（脚本）
 
-### 仅管理员功能需要（强烈建议配置）
+```env
+APPWRITE_ENDPOINT=https://your-appwrite-endpoint/v1
+APPWRITE_PROJECT_ID=your_project_id
+APPWRITE_DATABASE_ID=booth_hunter
+APPWRITE_API_KEY=your_server_api_key
+APPWRITE_CHATS_COLLECTION_ID=booth_hunter_chats
+APPWRITE_CATALOG_COLLECTION_ID=booth_hunter_catalog
+```
 
-- `SUPABASE_SERVICE_ROLE_KEY`
-
-> 注意：`SUPABASE_SERVICE_ROLE_KEY` 只能放在服务端（Vercel/本地 vercel dev 环境变量），不要暴露到前端。
+> 注意：`APPWRITE_API_KEY` 只给本地 bootstrap / publish 脚本用，不要暴露到前端。
 
 ---
 
-## 本地开发
-
-安装依赖：
+## 安装
 
 ```bash
 npm install
 ```
 
-启动（必须用 Vercel CLI 才能跑 `api/` 目录下的 functions）：
+---
+
+## 初始化 Appwrite
+
+先在 Appwrite 后台创建 project，然后配置上面的环境变量。之后执行：
 
 ```bash
-vercel dev
+npm run appwrite:bootstrap
+```
+
+它会确保存在：
+
+- `booth_hunter_chats` collection
+- `booth_hunter_catalog` collection
+
+以及当前 Phase 1 需要的字段。
+
+---
+
+## 本地开发
+
+### 前端
+
+```bash
+npm run dev
+```
+
+### 含 `/api/chat` 的本地联调
+
+```bash
+npx vercel dev
 ```
 
 ---
 
-## Supabase 初始化（SQL）
+## Phase 1A：本地同步 + raw 备份 + compact catalog 发布
 
-仓库提供 1 份 SQL：
+抓取 BOOTH `3D Models` 分类第一页的 5 条商品：
 
-### 初始化（必执行）
-
-在 Supabase Dashboard → SQL Editor 执行：
-
-```
-supabase/init.sql
+```bash
+npm run sync:run -- --pages=1 --limit=5 --db=data/raw/booth-pipeline.sqlite --images=data/images/booth
 ```
 
-它会做：
+这个脚本会：
 
-- 创建 `public.profiles`（包含 `is_admin`）
-- 为 profiles 增加轮数统计与用户覆盖限制字段：
-  - `total_turn_count`
-  - `session_turn_limit_override`
-  - `total_turn_limit_override`
-- 新用户自动创建 profile 的 trigger（`auth.users` → `profiles`）
-- `public.chats` 的 `updated_at` trigger（要求你的 chats 表已存在）
-- 为 chats 增加 `turn_count`（单会话轮数统计）
-- 创建 `public.app_settings`（全局默认限制）与 `consume_turn(chat_id)` RPC（原子校验+自增）
-- 开启 RLS：
-  - `profiles`：用户只能读自己的 profile（用于前端判断是否管理员）
-  - `chats`：用户只能读写自己的对话
-
-> 设计原则：管理员查看全站数据不通过 RLS 放开，而是只允许走 `/api/admin/*`（service_role）。
-
-### 运维/迁移（按需执行）
-
-`supabase/init.sql` 文件底部包含若干【可选段落】（默认注释掉），你可以按需取消注释并执行：
-
-- 回填历史 `auth.users` → `profiles`（幂等）
-- 检查/清理 `chats` 孤儿数据
-- 收口旧版的 `admin read all` policies（如果你历史上创建过）
+1. 抓取 BOOTH 列表与 item JSON
+2. 把 raw 数据写入本地 SQLite
+3. 下载并压缩图片到本地缓存
+4. 生成 normalized catalog item
+5. 如果配置了 Appwrite server env，则把 compact catalog 投影发布到 Appwrite
 
 ---
 
-## 对话轮数统计与限制（Turns)
+## Phase 1B：本地知识提取
 
-### 轮数定义
+### Caption
 
-每次用户点击一次“发送”算 1 轮（不管模型内部 tool loop 多少次）。
-
-### 默认限制（全站）
-
-默认值保存在 `public.app_settings`：
-
-- `default_session_turn_limit`：单会话最大轮数（默认 50；0 表示无限制）
-- `default_total_turn_limit`：用户总轮数最大值（默认 500；0 表示无限制）
-
-管理员面板左侧可直接修改这两个默认值。
-
-### 单独限制（按用户覆盖）
-
-写在 `public.profiles`：
-
-- `session_turn_limit_override`：该用户的单会话上限（NULL=使用默认；0=无限制）
-- `total_turn_limit_override`：该用户的总轮数上限（NULL=使用默认；0=无限制）
-
-管理员面板中，在用户卡片右侧点击“终端”图标可设置。
-
-### 后端行为
-
-`/api/chat` 会在调用模型前先调用 Supabase RPC：
-
-- `consume_turn(chat_id)`
-
-如果超限会返回 HTTP 429，前端会提示“达到上限”。
-
-## 管理员（Admin）
-
-### 设置管理员
-
-确保目标账号注册/登录过一次（触发 `profiles` 创建），然后在 SQL Editor：
-
-```sql
-update public.profiles
-set is_admin = true
-where email = 'your_admin@email.com';
+```bash
+npm run knowledge:caption -- --db=data/raw/booth-pipeline.sqlite
 ```
 
-### 管理员面板入口
+### OCR
 
-管理员登录后，顶栏右侧会出现盾牌图标，点击打开管理员面板。
+默认 `noop` 模式（只跑流水线，不启用真实 OCR）：
 
-### Admin API
+```bash
+npm run knowledge:ocr -- --db=data/raw/booth-pipeline.sqlite --mode=noop
+```
 
-这些接口都要求：
+真实 OCR（Tesseract）：
 
-- 你已配置 `SUPABASE_SERVICE_ROLE_KEY`
-- 请求头 `Authorization: Bearer <Supabase access_token>`（前端会自动带）
+```bash
+npm run knowledge:ocr -- --db=data/raw/booth-pipeline.sqlite --mode=tesseract
+```
 
-接口：
+### Structured extraction
 
-- `GET /api/admin/users`
-- `DELETE /api/admin/users?id=<uuid>`（删除用户：auth.users + profiles + 该用户 chats）
-- `GET /api/admin/chats`
-- `DELETE /api/admin/chats?id=<uuid>`（删除对话）
-- `GET /api/admin/chats?user_id=...`
-- `GET /api/admin/chats?id=...`
+```bash
+npm run knowledge:extract -- --db=data/raw/booth-pipeline.sqlite
+```
+
+---
+
+## Phase 1C：本地 embeddings 与检索验证
+
+### Text embeddings
+
+```bash
+npm run knowledge:embed-text -- --db=data/raw/booth-pipeline.sqlite
+```
+
+### Image embeddings
+
+```bash
+npm run knowledge:embed-images -- --db=data/raw/booth-pipeline.sqlite
+```
+
+### Retrieval smoke test
+
+纯文本：
+
+```bash
+npm run knowledge:test-retrieval -- --db=data/raw/booth-pipeline.sqlite --text="VRChat pose tool"
+```
+
+文本 + 图片：
+
+```bash
+npm run knowledge:test-retrieval -- --db=data/raw/booth-pipeline.sqlite --text="VRChat pose tool" --image="C:\path\to\image.webp"
+```
+
+---
+
+## 测试与验证
+
+### 自动化测试
+
+```bash
+npm test
+```
+
+### Type check
+
+```bash
+npx tsc --noEmit
+```
+
+### 构建
+
+```bash
+npm run build
+```
+
+### 推荐最小验证顺序
+
+```bash
+npm test
+npx tsc --noEmit
+npm run build
+npm run sync:run -- --pages=1 --limit=1 --db=data/raw/smoke.sqlite --images=data/images/smoke
+npm run knowledge:caption -- --db=data/raw/smoke.sqlite
+npm run knowledge:ocr -- --db=data/raw/smoke.sqlite --mode=noop
+npm run knowledge:extract -- --db=data/raw/smoke.sqlite
+npm run knowledge:embed-text -- --db=data/raw/smoke.sqlite
+npm run knowledge:embed-images -- --db=data/raw/smoke.sqlite
+npm run knowledge:test-retrieval -- --db=data/raw/smoke.sqlite --text="VRChat pose tool"
+```
+
+---
+
+## 安全约束
+
+- 用户自己的 LLM API key **只保存在浏览器本地**
+- Appwrite 中默认只保存：
+  - auth
+  - chat history
+  - user settings（非敏感）
+  - compact catalog projection
+- raw HTML / raw JSON / 图片本体 / embeddings 主数据以本地为主，不默认上云
+
+---
+
+## 当前 Phase 1 的实现取舍
+
+为了优先把数据库与知识库地基搭起来，当前实现采用了以下取舍：
+
+- caption 默认使用本地 heuristic provider，可在后续接真实 VLM
+- OCR 支持 Tesseract，也支持 `noop` 模式用于快速流水线验证
+- text embedding 使用 `local-hash-v1`
+- image embedding 使用 `local-pixel-v1`
+- retrieval 先做 local validation，不急着上云
+
+这套实现偏向 **“先跑通地基，再逐步提升质量”**，而不是一上来做成复杂的产品级架构。
