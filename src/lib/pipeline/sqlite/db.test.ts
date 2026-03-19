@@ -18,6 +18,10 @@ import {
   getStructuredItem,
   saveItemTextEmbedding,
   getItemTextEmbedding,
+  listItemTextEmbeddingsBySpace,
+  getImageEmbedding,
+  saveImageEmbedding,
+  listImageEmbeddingsBySpace,
 } from "./db";
 
 function tempDbPath(name: string) {
@@ -79,11 +83,31 @@ test("pipeline sqlite database creates schema and round-trips records", () => {
 
   saveItemTextEmbedding(db, {
     itemId: "1001",
-    model: "local-hash-v1",
+    embeddingSpace: "multimodal-shared",
+    model: "Qwen/Qwen3-VL-Embedding-2B",
     vectorJson: JSON.stringify([1, 0, 0]),
     updatedAt: "2026-03-19T00:04:00.000Z",
   });
-  assert.match(getItemTextEmbedding(db, "1001")?.vectorJson ?? "", /1/);
+  saveItemTextEmbedding(db, {
+    itemId: "1001",
+    embeddingSpace: "auxiliary-space",
+    model: "placeholder",
+    vectorJson: JSON.stringify([0, 1, 0]),
+    updatedAt: "2026-03-19T00:05:00.000Z",
+  });
+  assert.match(getItemTextEmbedding(db, "1001", "multimodal-shared")?.vectorJson ?? "", /1/);
+  assert.match(getItemTextEmbedding(db, "1001", "auxiliary-space")?.vectorJson ?? "", /1/);
+  assert.equal(listItemTextEmbeddingsBySpace(db, "multimodal-shared").length, 1);
+
+  saveImageEmbedding(db, {
+    imageKey: "1001:0",
+    embeddingSpace: "multimodal-shared",
+    model: "Qwen/Qwen3-VL-Embedding-2B",
+    vectorJson: JSON.stringify([0.1, 0.2, 0.3]),
+    updatedAt: "2026-03-19T00:06:00.000Z",
+  });
+  assert.match(getImageEmbedding(db, "1001:0", "multimodal-shared")?.vectorJson ?? "", /0.2/);
+  assert.equal(listImageEmbeddingsBySpace(db, "multimodal-shared").length, 1);
 
   db.close();
 });

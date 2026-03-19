@@ -26,8 +26,7 @@
 - Persist enrichment results locally first.
 
 ### Phase 1C — embeddings and basic retrieval
-- Generate local text embeddings.
-- Generate local image embeddings.
+- Generate local shared text/image embeddings with **Qwen3-VL-Embedding-2B**.
 - Build and test a basic local retrieval workflow before any cloud rollout.
 
 ## Architecture
@@ -46,3 +45,6 @@
 - Avoid product-grade worker/job/control-plane systems.
 - Do not store user third-party API keys server-side by default.
 - Keep Appwrite integrations behind repository interfaces to preserve future migration flexibility.
+- Keep the embedding provider behind a Python-backed abstraction so model swaps do not leak through the TypeScript pipeline.
+- Text and image should prefer a **single multimodal semantic space** when possible; separate text-only/image-only spaces are a fallback, not the default direction.
+- Reserve a reranker integration point, but do not let it block Phase 1C completion.

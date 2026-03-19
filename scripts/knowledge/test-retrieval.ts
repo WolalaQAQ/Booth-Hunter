@@ -1,7 +1,19 @@
-import { embedImageLocal } from '../../src/lib/pipeline/embed/images';
-import { embedTextLocal } from '../../src/lib/pipeline/embed/text';
-import { rankHybridMatches, rankTextMatches } from '../../src/lib/pipeline/retrieval/search';
-import { getNormalizedItem, listImageEmbeddings, listItemTextEmbeddings, openPipelineDatabase } from '../../src/lib/pipeline/sqlite/db';
+import {
+  createPythonEmbeddingProvider,
+  MULTIMODAL_SHARED_SPACE,
+} from '../../src/lib/pipeline/embed/provider';
+import {
+  averageVectors,
+  rankHybridMatches,
+  rankImageMatchesByItem,
+  rankTextMatches,
+} from '../../src/lib/pipeline/retrieval/search';
+import {
+  getNormalizedItem,
+  listImageEmbeddingsBySpace,
+  listItemTextEmbeddingsBySpace,
+  openPipelineDatabase,
+} from '../../src/lib/pipeline/sqlite/db';
 
 function argument(name: string, fallback: string): string {
   const prefixed = `--${name}=`;
@@ -13,22 +25,43 @@ async function main() {
   const db = openPipelineDatabase(argument('db', 'data/raw/booth-pipeline.sqlite'));
   const textQuery = argument('text', 'VRChat 3D outfit');
   const imagePath = argument('image', '');
+  const provider = createPythonEmbeddingProvider();
   try {
-    const textVector = embedTextLocal(textQuery);
-    const textMatches = rankTextMatches(textVector, listItemTextEmbeddings(db).map((record) => ({ itemId: record.itemId, vector: JSON.parse(record.vectorJson) })), 10);
+    const queryVectors: number[][] = [];
 
-    let results = textMatches;
-    if (imagePath) {
-      const imageVector = await embedImageLocal(imagePath);
-      const imageScores = new Map<string, number>();
-      for (const record of listImageEmbeddings(db)) {
-        const itemId = record.imageKey.split(':')[0];
-        const vector = JSON.parse(record.vectorJson);
-        const score = vector.reduce((sum: number, value: number, index: number) => sum + value * (imageVector[index] || 0), 0);
-        imageScores.set(itemId, Math.max(imageScores.get(itemId) || -Infinity, score));
-      }
-      results = rankHybridMatches(textMatches, Array.from(imageScores.entries()).map(([itemId, score]) => ({ itemId, score })), 0.7, 0.3, 10);
+    if (textQuery) {
+      const textQueryEmbedding = await provider.embedTexts(
+        [textQuery],
+        'Retrieve relevant BOOTH catalog items for the user query.'
+      );
+      queryVectors.push(textQueryEmbedding.vectors[0] || []);
     }
+
+    if (imagePath) {
+      const imageQueryEmbedding = await provider.embedImages([imagePath]);
+      queryVectors.push(imageQueryEmbedding.vectors[0] || []);
+    }
+
+    const queryVector = averageVectors(queryVectors);
+    const textMatches = rankTextMatches(
+      queryVector,
+      listItemTextEmbeddingsBySpace(db, MULTIMODAL_SHARED_SPACE).map((record) => ({
+        itemId: record.itemId,
+        vector: JSON.parse(record.vectorJson),
+      })),
+      10
+    );
+
+    const imageMatches = rankImageMatchesByItem(
+      queryVector,
+      listImageEmbeddingsBySpace(db, MULTIMODAL_SHARED_SPACE).map((record) => ({
+        imageKey: record.imageKey,
+        vector: JSON.parse(record.vectorJson),
+      })),
+      10
+    );
+
+    const results = rankHybridMatches(textMatches, imageMatches, 0.6, 0.4, 10);
 
     const printable = results.map((result) => {
       const item = getNormalizedItem(db, result.itemId);

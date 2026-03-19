@@ -14,6 +14,10 @@
 - All planned tasks for Phase 1A / 1B / 1C are implemented in the current branch
 - Verified with local tests/build plus end-to-end local pipeline smoke runs
 - Verified with a real Appwrite bootstrap and live compact catalog publish smoke test
+- Phase 1C embeddings were later upgraded from local baseline vectors to:
+  - `Qwen3-VL-Embedding-2B` for shared multimodal text/image retrieval
+- Real model smokes were verified in a CUDA-capable local Python environment via `scripts/ml/embed_models.py`
+- A reranker interface is reserved for future `Qwen3-VL-Reranker-2B/8B` work, but Phase 1C currently ships embedding-only.
 
 ---
 

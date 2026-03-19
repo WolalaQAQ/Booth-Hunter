@@ -8,7 +8,7 @@ Booth Hunter 正在从单纯的 Booth 聊天搜索助手，演进为一个 **面
 - **本地 SQLite**：BOOTH raw crawl 备份与知识库中间状态
 - **临时图片处理**：按需下载商品图片，压缩后直接进入 OCR / embeddings，不长期保留本地图片备份
 - **本地知识提取管线**：caption、OCR、structured extraction
-- **本地 embeddings 与检索验证**：text embeddings、image embeddings、basic retrieval smoke test
+- **本地 embeddings 与检索验证**：Qwen3-VL-Embedding-2B shared-space embeddings、basic retrieval smoke test
 - **薄 `/api/chat` 代理**：使用用户自己提供的 LLM API key；API key 只保存在浏览器本地，不落库
 
 ---
@@ -60,6 +60,26 @@ APPWRITE_CATALOG_COLLECTION_ID=booth_hunter_catalog
 
 ```bash
 npm install
+```
+
+如需运行真实 embedding 模型，再安装 Python 依赖：
+
+```bash
+pip install -r requirements-ml.txt
+```
+
+推荐使用带 CUDA 的独立 Python / conda 环境，并通过环境变量显式指定：
+
+```powershell
+$env:EMBED_PYTHON_BIN='C:\path\to\python.exe'
+$env:EMBED_DEVICE='cuda'
+$env:QWEN_VL_EMBED_MODEL_ID='D:\models\Qwen3-VL-Embedding-2B'
+```
+
+如果没有可用 GPU，可改成：
+
+```powershell
+$env:EMBED_DEVICE='cpu'
 ```
 
 ---
@@ -147,6 +167,18 @@ npm run knowledge:extract -- --db=data/raw/booth-pipeline.sqlite
 
 ## Phase 1C：本地 embeddings 与检索验证
 
+当前正式模型组合为：
+
+- shared multimodal embedding：`Qwen/Qwen3-VL-Embedding-2B`
+- reranker：**暂未接入**，只预留接口给 `Qwen/Qwen3-VL-Reranker-2B/8B`
+
+执行 embedding 脚本前，建议先设置 Python 解释器：
+
+```powershell
+$env:EMBED_PYTHON_BIN='C:\path\to\python.exe'
+$env:QWEN_VL_EMBED_MODEL_ID='D:\models\Qwen3-VL-Embedding-2B'
+```
+
 ### Text embeddings
 
 ```bash
@@ -231,9 +263,23 @@ npm run knowledge:test-retrieval -- --db=data/raw/smoke.sqlite --text="VRChat po
 
 - caption 默认使用本地 heuristic provider，可在后续接真实 VLM
 - OCR 支持 Tesseract，也支持 `noop` 模式用于快速流水线验证
-- text embedding 使用 `local-hash-v1`
-- image embedding 使用 `local-pixel-v1`
+- text / image 已统一升级为 `Qwen3-VL-Embedding-2B`
+- reranker 目前只预留接口，暂未启用
 - 图片默认不做本地持久化备份，而是按需下载处理
 - retrieval 先做 local validation，不急着上云
 
 这套实现偏向 **“先跑通地基，再逐步提升质量”**，而不是一上来做成复杂的产品级架构。
+
+## Embedding 相关说明
+
+- `Qwen3-VL-Embedding-2B` 现在同时负责：
+  - text-to-item retrieval
+  - text-to-image retrieval
+  - image-to-image retrieval
+  - image-to-item retrieval
+- 文本和图片现在进入同一个 shared embedding space，而不是分别走不同模型空间。
+- 当前检索脚本会把：
+  - item text embeddings
+  - item image embeddings
+  都放进 `Qwen3-VL-Embedding-2B` 的 shared space，再做本地混合排序。
+- reranker 目前只预留接口，后续再接 `Qwen3-VL-Reranker-2B/8B`。
