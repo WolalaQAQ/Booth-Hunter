@@ -1,4 +1,4 @@
-import { embedTextLocal } from '../../src/lib/pipeline/embed/text';
+import { createPythonEmbeddingProvider, MULTIMODAL_SHARED_SPACE } from '../../src/lib/pipeline/embed/provider';
 import { getStructuredItem, listImageAnalysisForItem, listNormalizedItems, openPipelineDatabase, saveItemTextEmbedding } from '../../src/lib/pipeline/sqlite/db';
 
 function argument(name: string, fallback: string): string {
@@ -9,9 +9,10 @@ function argument(name: string, fallback: string): string {
 
 async function main() {
   const db = openPipelineDatabase(argument('db', 'data/raw/booth-pipeline.sqlite'));
+  const provider = createPythonEmbeddingProvider();
   try {
     const items = listNormalizedItems(db, Number(argument('limit', '100')) || 100);
-    for (const record of items) {
+    const prepared = items.map((record) => {
       const item = JSON.parse(record.normalizedJson);
       const structured = getStructuredItem(db, item.itemId);
       const imageSignals = listImageAnalysisForItem(db, item.itemId);
@@ -20,14 +21,27 @@ async function main() {
         structured?.structuredJson || '',
         ...imageSignals.flatMap((signal) => [signal.captionText || '', signal.ocrText || '']),
       ].join('\n');
+      return { itemId: item.itemId, corpus };
+    });
+
+    if (prepared.length === 0) {
+      console.log('Text embeddings completed for 0 items.');
+      return;
+    }
+
+    const response = await provider.embedTexts(
+      prepared.map((entry) => entry.corpus)
+    );
+    for (const [index, entry] of prepared.entries()) {
       saveItemTextEmbedding(db, {
-        itemId: item.itemId,
-        model: 'local-hash-v1',
-        vectorJson: JSON.stringify(embedTextLocal(corpus)),
+        itemId: entry.itemId,
+        embeddingSpace: MULTIMODAL_SHARED_SPACE,
+        model: response.model,
+        vectorJson: JSON.stringify(response.vectors[index] || []),
         updatedAt: new Date().toISOString(),
       });
     }
-    console.log(`Text embeddings completed for ${items.length} items.`);
+    console.log(`Text embeddings completed for ${prepared.length} items.`);
   } finally {
     db.close();
   }

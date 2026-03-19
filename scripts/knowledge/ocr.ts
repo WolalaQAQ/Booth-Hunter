@@ -1,5 +1,6 @@
 import { extractOcrText, OcrProvider, TesseractOcrProvider } from '../../src/lib/pipeline/enrich/ocr';
-import { listAllCachedImages, openPipelineDatabase, saveImageAnalysis } from '../../src/lib/pipeline/sqlite/db';
+import { downloadAndPrepareImage } from '../../src/lib/pipeline/images/cache';
+import { listAllItemImages, openPipelineDatabase, saveImageAnalysis } from '../../src/lib/pipeline/sqlite/db';
 
 function argument(name: string, fallback: string): string {
   const prefixed = `--${name}=`;
@@ -19,18 +20,23 @@ async function main() {
   const provider = enabled ? new TesseractOcrProvider() : new NoopOcrProvider();
 
   try {
-    const images = listAllCachedImages(db);
+    const images = listAllItemImages(db);
     for (const image of images) {
-      const text = await extractOcrText(image.compressedPath, provider);
+      const prepared = await downloadAndPrepareImage({
+        itemId: image.itemId,
+        imageIndex: image.imageIndex,
+        sourceUrl: image.sourceUrl,
+      });
+      const text = await extractOcrText(prepared.buffer, provider);
       saveImageAnalysis(db, {
-        imageKey: image.cacheKey,
+        imageKey: image.imageKey,
         itemId: image.itemId,
         imageIndex: image.imageIndex,
         ocrText: text,
         updatedAt: new Date().toISOString(),
       });
     }
-    console.log(`OCR stage completed for ${images.length} cached images.`);
+    console.log(`OCR stage completed for ${images.length} item images.`);
   } finally {
     db.close();
   }

@@ -4,7 +4,7 @@
 
 **Goal:** Replace the discarded Supabase-centric Phase 1 direction with a local-first Appwrite-based Phase 1A/1B/1C implementation that is fully testable locally.
 
-**Architecture:** User-facing auth/chat/settings move to Appwrite behind repository abstractions. A local pipeline built from manual scripts handles BOOTH ingest, SQLite raw backups, image caching/compression, knowledge extraction, embeddings, and local retrieval validation. A thin `/api/chat` proxy remains for provider compatibility while keeping user API keys out of cloud persistence.
+**Architecture:** User-facing auth/chat/settings move to Appwrite behind repository abstractions. A local pipeline built from manual scripts handles BOOTH ingest, SQLite raw backups, transient image download/compression, knowledge extraction, embeddings, and local retrieval validation. A thin `/api/chat` proxy remains for provider compatibility while keeping user API keys out of cloud persistence.
 
 **Tech Stack:** React, TypeScript, Vite, Appwrite SDK/REST, Node scripts, SQLite, local filesystem cache, OpenAI-compatible SDK, OCR/image utilities, Node test runner.
 
@@ -14,6 +14,10 @@
 - All planned tasks for Phase 1A / 1B / 1C are implemented in the current branch
 - Verified with local tests/build plus end-to-end local pipeline smoke runs
 - Verified with a real Appwrite bootstrap and live compact catalog publish smoke test
+- Phase 1C embeddings were later upgraded from local baseline vectors to:
+  - `Qwen3-VL-Embedding-2B` for shared multimodal text/image retrieval
+- Real model smokes were verified in a CUDA-capable local Python environment via `scripts/ml/embed_models.py`
+- A reranker interface is reserved for future `Qwen3-VL-Reranker-2B/8B` work, but Phase 1C currently ships embedding-only.
 
 ---
 
@@ -118,7 +122,7 @@
 - [ ] **Step 4: Keep search behavior working while making the API thin and backend-agnostic.**
 - [ ] **Step 5: Run API-focused tests and build verification.**
 
-### Task 5: Implement the local SQLite raw store and image cache (Phase 1A core)
+### Task 5: Implement the local SQLite raw store and transient image pipeline (Phase 1A core)
 
 **Files:**
 - Create: `src/lib/pipeline/sqlite/schema.ts`
@@ -128,13 +132,13 @@
 - Create: `src/lib/pipeline/booth/adapter.ts`
 - Create: `src/lib/pipeline/normalize/catalog.ts`
 - Create: `scripts/sync/run.ts`
-- Create: tests for SQLite, image cache, and normalization
+- Create: tests for SQLite, transient image processing, and normalization
 
-- [ ] **Step 1: Write failing tests for SQLite schema creation, raw item persistence, image cache bookkeeping, and normalization output.**
+- [ ] **Step 1: Write failing tests for SQLite schema creation, raw item persistence, transient image bookkeeping, and normalization output.**
 - [ ] **Step 2: Implement local SQLite schema and DB helpers.**
 - [ ] **Step 3: Implement image download + compression + cache metadata helpers.**
 - [ ] **Step 4: Implement Booth adapter wrapper and normalization helpers.**
-- [ ] **Step 5: Implement manual `scripts/sync/run.ts` to fetch, backup, normalize, and cache images.**
+- [ ] **Step 5: Implement manual `scripts/sync/run.ts` to fetch, backup, normalize, and process images transiently.**
 - [ ] **Step 6: Run unit tests and a scripted sample sync fixture test.**
 
 ### Task 6: Publish compact catalog data to Appwrite (remaining Phase 1A)
@@ -149,7 +153,7 @@
 - [ ] **Step 1: Write failing tests for catalog projection and Appwrite publish/upsert behavior.**
 - [ ] **Step 2: Implement local catalog repository and compact Appwrite catalog repository.**
 - [ ] **Step 3: Extend sync script to publish normalized records to Appwrite.**
-- [ ] **Step 4: Add a verification script/test that checks SQLite + image cache + Appwrite projection consistency.**
+- [ ] **Step 4: Add a verification script/test that checks SQLite + transient image-processing metadata + Appwrite projection consistency.**
 - [ ] **Step 5: Run tests and build.**
 
 ### Task 7: Implement local knowledge extraction pipeline (Phase 1B)

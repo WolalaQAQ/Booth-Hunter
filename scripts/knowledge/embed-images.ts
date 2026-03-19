@@ -1,5 +1,5 @@
-import { embedImageLocal } from '../../src/lib/pipeline/embed/images';
-import { listAllCachedImages, openPipelineDatabase, saveImageEmbedding } from '../../src/lib/pipeline/sqlite/db';
+import { createPythonEmbeddingProvider, MULTIMODAL_SHARED_SPACE } from '../../src/lib/pipeline/embed/provider';
+import { listAllItemImages, openPipelineDatabase, saveImageEmbedding } from '../../src/lib/pipeline/sqlite/db';
 
 function argument(name: string, fallback: string): string {
   const prefixed = `--${name}=`;
@@ -9,18 +9,25 @@ function argument(name: string, fallback: string): string {
 
 async function main() {
   const db = openPipelineDatabase(argument('db', 'data/raw/booth-pipeline.sqlite'));
+  const provider = createPythonEmbeddingProvider();
   try {
-    const images = listAllCachedImages(db);
-    for (const image of images) {
-      const vector = await embedImageLocal(image.compressedPath);
+    const images = listAllItemImages(db);
+    if (images.length === 0) {
+      console.log('Image embeddings completed for 0 item images.');
+      return;
+    }
+
+    const response = await provider.embedImages(images.map((image) => image.sourceUrl));
+    for (const [index, image] of images.entries()) {
       saveImageEmbedding(db, {
-        imageKey: image.cacheKey,
-        model: 'local-pixel-v1',
-        vectorJson: JSON.stringify(vector),
+        imageKey: image.imageKey,
+        embeddingSpace: MULTIMODAL_SHARED_SPACE,
+        model: response.model,
+        vectorJson: JSON.stringify(response.vectors[index] || []),
         updatedAt: new Date().toISOString(),
       });
     }
-    console.log(`Image embeddings completed for ${images.length} cached images.`);
+    console.log(`Image embeddings completed for ${images.length} item images.`);
   } finally {
     db.close();
   }

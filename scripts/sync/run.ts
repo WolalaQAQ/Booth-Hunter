@@ -4,11 +4,11 @@ import { Client, Databases } from 'node-appwrite';
 import { getServerAppwriteConfig } from '../../src/lib/appwrite/config';
 import { AppwriteCatalogRepository } from '../../src/lib/repositories/catalog/appwriteCatalog';
 import { fetchBrowsePage, fetchItemJson } from '../../src/lib/pipeline/booth/adapter';
-import { downloadAndCacheImage } from '../../src/lib/pipeline/images/cache';
+import { downloadAndPrepareImage } from '../../src/lib/pipeline/images/cache';
 import { normalizeBoothItem } from '../../src/lib/pipeline/normalize/catalog';
 import {
   openPipelineDatabase,
-  upsertCachedImage,
+  upsertItemImage,
   upsertNormalizedItem,
   upsertRawItem,
 } from '../../src/lib/pipeline/sqlite/db';
@@ -31,7 +31,6 @@ async function maybeCreateCatalogRepository() {
 
 async function main() {
   const dbPath = argument('db', 'data/raw/booth-pipeline.sqlite');
-  const imagesDir = argument('images', 'data/images');
   const pages = Math.max(1, Number(argument('pages', '1')) || 1);
   const limit = Math.max(1, Number(argument('limit', '20')) || 20);
   const db = openPipelineDatabase(dbPath);
@@ -65,13 +64,22 @@ async function main() {
         });
 
         for (const image of normalized.images) {
-          const cached = await downloadAndCacheImage({
+          const prepared = await downloadAndPrepareImage({
             itemId: normalized.itemId,
             imageIndex: image.imageIndex,
             sourceUrl: image.sourceUrl,
-            outputDir: imagesDir,
           });
-          upsertCachedImage(db, cached);
+          upsertItemImage(db, {
+            imageKey: prepared.imageKey,
+            itemId: prepared.itemId,
+            imageIndex: prepared.imageIndex,
+            sourceUrl: prepared.sourceUrl,
+            width: prepared.width,
+            height: prepared.height,
+            sizeBytes: prepared.sizeBytes,
+            sha256: prepared.sha256,
+            processedAt: prepared.processedAt,
+          });
         }
 
         publishedItems.push(normalized);

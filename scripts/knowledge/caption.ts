@@ -1,5 +1,5 @@
 import { generateCaption } from '../../src/lib/pipeline/enrich/caption';
-import { listCachedImagesForItem, listNormalizedItems, openPipelineDatabase, saveImageAnalysis } from '../../src/lib/pipeline/sqlite/db';
+import { listItemImagesForItem, listNormalizedItems, openPipelineDatabase, saveImageAnalysis } from '../../src/lib/pipeline/sqlite/db';
 
 function argument(name: string, fallback: string): string {
   const prefixed = `--${name}=`;
@@ -13,8 +13,8 @@ async function main() {
     const items = listNormalizedItems(db, Number(argument('limit', '100')) || 100);
     for (const record of items) {
       const item = JSON.parse(record.normalizedJson);
-      const cachedImages = listCachedImagesForItem(db, item.itemId);
-      for (const image of cachedImages) {
+      const itemImages = listItemImagesForItem(db, item.itemId);
+      for (const image of itemImages) {
         const caption = await generateCaption({
           itemTitle: item.title,
           categoryName: item.categoryName,
@@ -22,7 +22,7 @@ async function main() {
           imageIndex: image.imageIndex,
         });
         saveImageAnalysis(db, {
-          imageKey: image.cacheKey,
+          imageKey: image.imageKey,
           itemId: item.itemId,
           imageIndex: image.imageIndex,
           captionText: caption,

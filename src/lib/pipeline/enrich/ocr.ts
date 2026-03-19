@@ -1,14 +1,14 @@
 import { createWorker } from 'tesseract.js';
 
 export type OcrProvider = {
-  recognize(imagePath: string): Promise<string>;
+  recognize(image: string | Buffer): Promise<string>;
 };
 
 export class TesseractOcrProvider implements OcrProvider {
-  async recognize(imagePath: string): Promise<string> {
+  async recognize(image: string | Buffer): Promise<string> {
     const worker = await createWorker(['eng', 'jpn']);
     try {
-      const result = await worker.recognize(imagePath);
+      const result = await worker.recognize(image);
       return result.data.text.trim();
     } finally {
       await worker.terminate();
@@ -16,6 +16,6 @@ export class TesseractOcrProvider implements OcrProvider {
   }
 }
 
-export async function extractOcrText(imagePath: string, provider: OcrProvider = new TesseractOcrProvider()): Promise<string> {
-  return provider.recognize(imagePath);
+export async function extractOcrText(image: string | Buffer, provider: OcrProvider = new TesseractOcrProvider()): Promise<string> {
+  return provider.recognize(image);
 }

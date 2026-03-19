@@ -15,17 +15,16 @@ export type RawItemRecord = {
   rawHash: string;
 };
 
-export type CachedImageRecord = {
-  cacheKey: string;
+export type ItemImageRecord = {
+  imageKey: string;
   itemId: string;
   imageIndex: number;
   sourceUrl: string;
-  compressedPath: string;
   width: number | null;
   height: number | null;
   sizeBytes: number;
   sha256: string;
-  downloadedAt: string;
+  processedAt: string;
 };
 
 export type NormalizedItemRecord = {
@@ -83,26 +82,25 @@ export function listRawItems(db: PipelineDatabase, limit = 100): RawItemRecord[]
   return db.prepare(`SELECT item_id as itemId, listing_page as listingPage, source_url as sourceUrl, fetched_at as fetchedAt, raw_json as rawJson, raw_hash as rawHash FROM raw_items ORDER BY fetched_at DESC LIMIT ?`).all(limit) as RawItemRecord[];
 }
 
-export function upsertCachedImage(db: PipelineDatabase, record: CachedImageRecord): void {
+export function upsertItemImage(db: PipelineDatabase, record: ItemImageRecord): void {
   db.prepare(`
-    INSERT INTO cached_images (cache_key, item_id, image_index, source_url, compressed_path, width, height, size_bytes, sha256, downloaded_at)
-    VALUES (@cacheKey, @itemId, @imageIndex, @sourceUrl, @compressedPath, @width, @height, @sizeBytes, @sha256, @downloadedAt)
-    ON CONFLICT(cache_key) DO UPDATE SET
-      compressed_path = excluded.compressed_path,
+    INSERT INTO item_images (image_key, item_id, image_index, source_url, width, height, size_bytes, sha256, processed_at)
+    VALUES (@imageKey, @itemId, @imageIndex, @sourceUrl, @width, @height, @sizeBytes, @sha256, @processedAt)
+    ON CONFLICT(image_key) DO UPDATE SET
       width = excluded.width,
       height = excluded.height,
       size_bytes = excluded.size_bytes,
       sha256 = excluded.sha256,
-      downloaded_at = excluded.downloaded_at
+      processed_at = excluded.processed_at
   `).run(record);
 }
 
-export function listCachedImagesForItem(db: PipelineDatabase, itemId: string): CachedImageRecord[] {
-  return db.prepare(`SELECT cache_key as cacheKey, item_id as itemId, image_index as imageIndex, source_url as sourceUrl, compressed_path as compressedPath, width, height, size_bytes as sizeBytes, sha256, downloaded_at as downloadedAt FROM cached_images WHERE item_id = ? ORDER BY image_index ASC`).all(itemId) as CachedImageRecord[];
+export function listItemImagesForItem(db: PipelineDatabase, itemId: string): ItemImageRecord[] {
+  return db.prepare(`SELECT image_key as imageKey, item_id as itemId, image_index as imageIndex, source_url as sourceUrl, width, height, size_bytes as sizeBytes, sha256, processed_at as processedAt FROM item_images WHERE item_id = ? ORDER BY image_index ASC`).all(itemId) as ItemImageRecord[];
 }
 
-export function listAllCachedImages(db: PipelineDatabase): CachedImageRecord[] {
-  return db.prepare(`SELECT cache_key as cacheKey, item_id as itemId, image_index as imageIndex, source_url as sourceUrl, compressed_path as compressedPath, width, height, size_bytes as sizeBytes, sha256, downloaded_at as downloadedAt FROM cached_images ORDER BY item_id ASC, image_index ASC`).all() as CachedImageRecord[];
+export function listAllItemImages(db: PipelineDatabase): ItemImageRecord[] {
+  return db.prepare(`SELECT image_key as imageKey, item_id as itemId, image_index as imageIndex, source_url as sourceUrl, width, height, size_bytes as sizeBytes, sha256, processed_at as processedAt FROM item_images ORDER BY item_id ASC, image_index ASC`).all() as ItemImageRecord[];
 }
 
 export function upsertNormalizedItem(db: PipelineDatabase, record: NormalizedItemRecord): void {
@@ -161,30 +159,34 @@ export function getStructuredItem(db: PipelineDatabase, itemId: string): Structu
   return db.prepare(`SELECT item_id as itemId, structured_json as structuredJson, updated_at as updatedAt FROM structured_items WHERE item_id = ?`).get(itemId) as StructuredItemRecord | undefined;
 }
 
-export function saveItemTextEmbedding(db: PipelineDatabase, record: { itemId: string; model: string; vectorJson: string; updatedAt: string }): void {
+export function saveItemTextEmbedding(db: PipelineDatabase, record: { itemId: string; embeddingSpace: string; model: string; vectorJson: string; updatedAt: string }): void {
   db.prepare(`
-    INSERT INTO item_text_embeddings (item_id, model, vector_json, updated_at)
-    VALUES (@itemId, @model, @vectorJson, @updatedAt)
-    ON CONFLICT(item_id) DO UPDATE SET
+    INSERT INTO item_text_embeddings (item_id, embedding_space, model, vector_json, updated_at)
+    VALUES (@itemId, @embeddingSpace, @model, @vectorJson, @updatedAt)
+    ON CONFLICT(item_id, embedding_space) DO UPDATE SET
       model = excluded.model,
       vector_json = excluded.vector_json,
       updated_at = excluded.updated_at
   `).run(record);
 }
 
-export function getItemTextEmbedding(db: PipelineDatabase, itemId: string) {
-  return db.prepare(`SELECT item_id as itemId, model, vector_json as vectorJson, updated_at as updatedAt FROM item_text_embeddings WHERE item_id = ?`).get(itemId) as { itemId: string; model: string; vectorJson: string; updatedAt: string } | undefined;
+export function getItemTextEmbedding(db: PipelineDatabase, itemId: string, embeddingSpace: string) {
+  return db.prepare(`SELECT item_id as itemId, embedding_space as embeddingSpace, model, vector_json as vectorJson, updated_at as updatedAt FROM item_text_embeddings WHERE item_id = ? AND embedding_space = ?`).get(itemId, embeddingSpace) as { itemId: string; embeddingSpace: string; model: string; vectorJson: string; updatedAt: string } | undefined;
 }
 
 export function listItemTextEmbeddings(db: PipelineDatabase) {
-  return db.prepare(`SELECT item_id as itemId, model, vector_json as vectorJson, updated_at as updatedAt FROM item_text_embeddings`).all() as { itemId: string; model: string; vectorJson: string; updatedAt: string }[];
+  return db.prepare(`SELECT item_id as itemId, embedding_space as embeddingSpace, model, vector_json as vectorJson, updated_at as updatedAt FROM item_text_embeddings`).all() as { itemId: string; embeddingSpace: string; model: string; vectorJson: string; updatedAt: string }[];
 }
 
-export function saveImageEmbedding(db: PipelineDatabase, record: { imageKey: string; model: string; vectorJson: string; updatedAt: string }): void {
+export function listItemTextEmbeddingsBySpace(db: PipelineDatabase, embeddingSpace: string) {
+  return db.prepare(`SELECT item_id as itemId, embedding_space as embeddingSpace, model, vector_json as vectorJson, updated_at as updatedAt FROM item_text_embeddings WHERE embedding_space = ?`).all(embeddingSpace) as { itemId: string; embeddingSpace: string; model: string; vectorJson: string; updatedAt: string }[];
+}
+
+export function saveImageEmbedding(db: PipelineDatabase, record: { imageKey: string; embeddingSpace: string; model: string; vectorJson: string; updatedAt: string }): void {
   db.prepare(`
-    INSERT INTO image_embeddings (image_key, model, vector_json, updated_at)
-    VALUES (@imageKey, @model, @vectorJson, @updatedAt)
-    ON CONFLICT(image_key) DO UPDATE SET
+    INSERT INTO image_embeddings (image_key, embedding_space, model, vector_json, updated_at)
+    VALUES (@imageKey, @embeddingSpace, @model, @vectorJson, @updatedAt)
+    ON CONFLICT(image_key, embedding_space) DO UPDATE SET
       model = excluded.model,
       vector_json = excluded.vector_json,
       updated_at = excluded.updated_at
@@ -192,5 +194,13 @@ export function saveImageEmbedding(db: PipelineDatabase, record: { imageKey: str
 }
 
 export function listImageEmbeddings(db: PipelineDatabase) {
-  return db.prepare(`SELECT image_key as imageKey, model, vector_json as vectorJson, updated_at as updatedAt FROM image_embeddings`).all() as { imageKey: string; model: string; vectorJson: string; updatedAt: string }[];
+  return db.prepare(`SELECT image_key as imageKey, embedding_space as embeddingSpace, model, vector_json as vectorJson, updated_at as updatedAt FROM image_embeddings`).all() as { imageKey: string; embeddingSpace: string; model: string; vectorJson: string; updatedAt: string }[];
+}
+
+export function getImageEmbedding(db: PipelineDatabase, imageKey: string, embeddingSpace: string) {
+  return db.prepare(`SELECT image_key as imageKey, embedding_space as embeddingSpace, model, vector_json as vectorJson, updated_at as updatedAt FROM image_embeddings WHERE image_key = ? AND embedding_space = ?`).get(imageKey, embeddingSpace) as { imageKey: string; embeddingSpace: string; model: string; vectorJson: string; updatedAt: string } | undefined;
+}
+
+export function listImageEmbeddingsBySpace(db: PipelineDatabase, embeddingSpace: string) {
+  return db.prepare(`SELECT image_key as imageKey, embedding_space as embeddingSpace, model, vector_json as vectorJson, updated_at as updatedAt FROM image_embeddings WHERE embedding_space = ?`).all(embeddingSpace) as { imageKey: string; embeddingSpace: string; model: string; vectorJson: string; updatedAt: string }[];
 }

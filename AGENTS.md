@@ -5,9 +5,9 @@
 - `api/chat.ts` is a **thin OpenAI-compatible proxy**. It accepts request-time provider configuration and user API keys, but must not persist those keys.
 - `src/lib/appwrite/*` contains Appwrite config/models/client helpers.
 - `src/lib/repositories/*` contains backend-agnostic repository interfaces plus the current Appwrite implementations.
-- `src/lib/pipeline/*` contains the local knowledge-base pipeline: SQLite storage, BOOTH adapters, image caching/compression, normalization, enrichment, embeddings, and retrieval helpers.
+- `src/lib/pipeline/*` contains the local knowledge-base pipeline: SQLite storage, BOOTH adapters, transient image download/compression, normalization, enrichment, embeddings, and retrieval helpers.
 - `scripts/sync/*` and `scripts/knowledge/*` are the primary Phase 1 execution surface. Prefer these local scripts over adding cloud workers.
-- `data/` is local pipeline output (SQLite DBs, cached images, smoke-test artifacts) and should stay ignored.
+- `data/` is local pipeline output (SQLite DBs and smoke-test artifacts) and should stay ignored.
 - `docs/superpowers/*` holds the approved Phase 1 local-first spec/plan.
 
 ## Build, Test, and Development Commands
@@ -18,8 +18,9 @@
 - `npx tsc --noEmit` — run type-check verification.
 - `npm run build` — build the frontend bundle.
 - `npm run appwrite:bootstrap` — create/verify Appwrite collections and attributes.
-- `npm run sync:run` — manually crawl BOOTH 3D Models into the local SQLite + image cache pipeline and optionally publish compact catalog data to Appwrite.
+- `npm run sync:run` — manually crawl BOOTH 3D Models into the local SQLite pipeline, process image metadata transiently, and optionally publish compact catalog data to Appwrite.
 - `npm run knowledge:caption|ocr|extract|embed-text|embed-images|test-retrieval` — run local Phase 1B/1C stages.
+- `pip install -r requirements-ml.txt` — install the Python-side embedding dependencies when real Qwen multimodal embedding inference is needed.
 
 ## Coding Style & Naming Conventions
 - Use TypeScript with 2-space indentation, semicolons, and ES module imports.
@@ -41,7 +42,9 @@
 ## Security & Configuration Tips
 - Keep `APPWRITE_API_KEY` server-side only. Never expose it to the browser.
 - User-supplied LLM API keys must remain **browser-local by default**. They may be sent request-time to `/api/chat`, but must not be persisted in Appwrite.
-- Treat local SQLite DBs and cached images as knowledge-base assets; keep them out of the repo and back them up separately if needed.
+- Treat local SQLite DBs as knowledge-base assets; keep them out of the repo and back them up separately if needed.
+- Prefer setting `EMBED_PYTHON_BIN` explicitly so Node scripts use the intended Python / conda environment for embeddings.
+- Prefer setting `QWEN_VL_EMBED_MODEL_ID` explicitly when the model is predownloaded to a local path.
 
 ## Product Direction & Long-Term Roadmap (2026-03-18)
 
@@ -219,6 +222,7 @@ Expected outcome:
 - **Phase 1A completed**
 - **Phase 1B completed**
 - **Phase 1C completed**
+- **Phase 1C embedding upgrade completed**
 
 ### Completed verification snapshot
 
@@ -237,6 +241,9 @@ Expected outcome:
   - `npm run appwrite:bootstrap`
   - live `sync:run` publish smoke test against the configured Appwrite project
   - direct Appwrite document listing confirmed catalog rows were created successfully
+- Real embedding-model verification also completed:
+  - direct Python smoke runs for `Qwen3-VL-Embedding-2B` text and image paths
+  - local `knowledge:embed-text`, `knowledge:embed-images`, and `knowledge:test-retrieval` runs with the configured CUDA Python environment and local model path
 
 ### Phase 1 split
 
@@ -262,7 +269,7 @@ Phase 1 is intentionally split into three local-first subphases:
   - **BOOTH**
   - **all items in the 3D Models category**
 - Raw crawl data and pipeline state live in **local SQLite**.
-- Cached image bodies live on the **local filesystem** and are compressed before storage.
+- Product images are downloaded **transiently** when needed, compressed in-memory, and discarded after metadata/derived results are produced.
 - Do not store images as base64 in database tables by default.
 
 ### Current Phase 1 implementation choices
@@ -278,12 +285,20 @@ Phase 1 is intentionally split into three local-first subphases:
   - Tesseract OCR (or `noop` mode for fast smoke tests)
   - rule-based structured signal extraction
 - Phase 1C currently uses:
-  - `local-hash-v1` text embeddings
-  - `local-pixel-v1` image embeddings
+  - `Qwen3-VL-Embedding-2B` for shared text/image embeddings
+  - Python-backed provider abstraction via `scripts/ml/embed_models.py`
+  - a reserved reranker interface for future `Qwen3-VL-Reranker-*` integration
   - local retrieval validation scripts before any cloud rollout
+
+### Embedding environment rules
+
+- Real embedding runs require a Python environment with `requirements-ml.txt` installed.
+- Prefer a CUDA-capable environment when available, but allow `EMBED_DEVICE=cpu` fallback.
+- Use `EMBED_PYTHON_BIN` to point Node scripts at the correct interpreter instead of assuming the default `python` on PATH.
+- Use `QWEN_VL_EMBED_MODEL_ID` to point the pipeline at the downloaded `Qwen3-VL-Embedding-2B` directory when a local model mirror is available.
 
 ### Validation preference
 
 - During Phase 1, prioritize **database construction and validation scripts** over polished user interaction.
-- Favor verification that proves the local DB, local cache, and retrieval outputs are internally consistent.
+- Favor verification that proves the local DB, transient image-processing path, and retrieval outputs are internally consistent.
 - Local smoke scripts are part of the required verification surface, not optional extras.
