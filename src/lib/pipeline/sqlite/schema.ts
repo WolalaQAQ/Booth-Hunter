@@ -8,17 +8,16 @@ CREATE TABLE IF NOT EXISTS raw_items (
   raw_hash TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS cached_images (
-  cache_key TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS item_images (
+  image_key TEXT PRIMARY KEY,
   item_id TEXT NOT NULL,
   image_index INTEGER NOT NULL,
   source_url TEXT NOT NULL,
-  compressed_path TEXT NOT NULL,
   width INTEGER,
   height INTEGER,
   size_bytes INTEGER,
   sha256 TEXT NOT NULL,
-  downloaded_at TEXT NOT NULL
+  processed_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS normalized_items (

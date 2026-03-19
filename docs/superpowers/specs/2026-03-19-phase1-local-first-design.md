@@ -1,6 +1,6 @@
 # Phase 1 Local-First Foundation Design
 
-**Goal:** Build a low-cost, local-first Phase 1 for Booth-Hunter: Appwrite for user-facing data, local SQLite + local image cache for BOOTH ingest, local knowledge extraction and embedding validation before any cloud publication.
+**Goal:** Build a low-cost, local-first Phase 1 for Booth-Hunter: Appwrite for user-facing data, local SQLite for BOOTH ingest, transient image processing, and local knowledge extraction / embedding validation before any cloud publication.
 
 ## Status
 
@@ -16,7 +16,7 @@
 - Keep a thin `/api/chat` proxy; user LLM API keys stay local and are passed per request.
 - Build local manual sync scripts for BOOTH 3D Models.
 - Store raw crawl data in local SQLite.
-- Download and compress product images into a local cache.
+- Download and compress product images transiently during processing without keeping long-term local image backups by default.
 - Normalize catalog data and publish a compact projection to Appwrite.
 
 ### Phase 1B — knowledge extraction foundation
@@ -33,13 +33,13 @@
 ## Architecture
 - **Frontend/UI:** existing React app, updated to use Appwrite auth/chat/settings and local user-held LLM provider config.
 - **Thin API:** existing `/api/chat` remains the only required online inference path; it receives a user-supplied provider config/key for the current request and does not persist the key.
-- **Local pipeline:** manual Node scripts handle crawl, raw backup, image caching, enrichment, and retrieval tests.
-- **Cloud publishing:** Appwrite stores only user-facing data and a compact catalog projection; raw payloads and image binaries remain local.
+- **Local pipeline:** manual Node scripts handle crawl, raw backup, transient image processing, enrichment, and retrieval tests.
+- **Cloud publishing:** Appwrite stores only user-facing data and a compact catalog projection; raw payloads remain local, and image binaries are not retained by default.
 
 ## Data boundaries
 - **Appwrite stores:** auth, profile, chats, settings, compact catalog rows, compact image metadata.
 - **Local SQLite stores:** crawl runs, raw items, raw item images, normalized catalog, caption/OCR/structured extraction results, embeddings metadata, retrieval test runs.
-- **Local filesystem stores:** compressed image cache and optional exports.
+- **Local filesystem stores:** optional exports only; product images are not retained by default.
 
 ## Constraints
 - Prefer local-first over always-on cloud services.

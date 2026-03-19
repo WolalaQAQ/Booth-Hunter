@@ -5,6 +5,8 @@ import path from "node:path";
 import fs from "node:fs";
 
 import {
+  upsertItemImage,
+  listAllItemImages,
   openPipelineDatabase,
   upsertRawItem,
   getRawItem,
@@ -36,6 +38,19 @@ test("pipeline sqlite database creates schema and round-trips records", () => {
   });
 
   assert.equal(getRawItem(db, "1001")?.rawHash, "hash-1");
+
+  upsertItemImage(db, {
+    imageKey: "1001:0",
+    itemId: "1001",
+    imageIndex: 0,
+    sourceUrl: "https://example.com/1001.webp",
+    width: 512,
+    height: 512,
+    sizeBytes: 2048,
+    sha256: "img-hash-1",
+    processedAt: "2026-03-19T00:00:30.000Z",
+  });
+  assert.equal(listAllItemImages(db)[0]?.sha256, "img-hash-1");
 
   upsertNormalizedItem(db, {
     itemId: "1001",

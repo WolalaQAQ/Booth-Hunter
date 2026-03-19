@@ -15,17 +15,16 @@ export type RawItemRecord = {
   rawHash: string;
 };
 
-export type CachedImageRecord = {
-  cacheKey: string;
+export type ItemImageRecord = {
+  imageKey: string;
   itemId: string;
   imageIndex: number;
   sourceUrl: string;
-  compressedPath: string;
   width: number | null;
   height: number | null;
   sizeBytes: number;
   sha256: string;
-  downloadedAt: string;
+  processedAt: string;
 };
 
 export type NormalizedItemRecord = {
@@ -83,26 +82,25 @@ export function listRawItems(db: PipelineDatabase, limit = 100): RawItemRecord[]
   return db.prepare(`SELECT item_id as itemId, listing_page as listingPage, source_url as sourceUrl, fetched_at as fetchedAt, raw_json as rawJson, raw_hash as rawHash FROM raw_items ORDER BY fetched_at DESC LIMIT ?`).all(limit) as RawItemRecord[];
 }
 
-export function upsertCachedImage(db: PipelineDatabase, record: CachedImageRecord): void {
+export function upsertItemImage(db: PipelineDatabase, record: ItemImageRecord): void {
   db.prepare(`
-    INSERT INTO cached_images (cache_key, item_id, image_index, source_url, compressed_path, width, height, size_bytes, sha256, downloaded_at)
-    VALUES (@cacheKey, @itemId, @imageIndex, @sourceUrl, @compressedPath, @width, @height, @sizeBytes, @sha256, @downloadedAt)
-    ON CONFLICT(cache_key) DO UPDATE SET
-      compressed_path = excluded.compressed_path,
+    INSERT INTO item_images (image_key, item_id, image_index, source_url, width, height, size_bytes, sha256, processed_at)
+    VALUES (@imageKey, @itemId, @imageIndex, @sourceUrl, @width, @height, @sizeBytes, @sha256, @processedAt)
+    ON CONFLICT(image_key) DO UPDATE SET
       width = excluded.width,
       height = excluded.height,
       size_bytes = excluded.size_bytes,
       sha256 = excluded.sha256,
-      downloaded_at = excluded.downloaded_at
+      processed_at = excluded.processed_at
   `).run(record);
 }
 
-export function listCachedImagesForItem(db: PipelineDatabase, itemId: string): CachedImageRecord[] {
-  return db.prepare(`SELECT cache_key as cacheKey, item_id as itemId, image_index as imageIndex, source_url as sourceUrl, compressed_path as compressedPath, width, height, size_bytes as sizeBytes, sha256, downloaded_at as downloadedAt FROM cached_images WHERE item_id = ? ORDER BY image_index ASC`).all(itemId) as CachedImageRecord[];
+export function listItemImagesForItem(db: PipelineDatabase, itemId: string): ItemImageRecord[] {
+  return db.prepare(`SELECT image_key as imageKey, item_id as itemId, image_index as imageIndex, source_url as sourceUrl, width, height, size_bytes as sizeBytes, sha256, processed_at as processedAt FROM item_images WHERE item_id = ? ORDER BY image_index ASC`).all(itemId) as ItemImageRecord[];
 }
 
-export function listAllCachedImages(db: PipelineDatabase): CachedImageRecord[] {
-  return db.prepare(`SELECT cache_key as cacheKey, item_id as itemId, image_index as imageIndex, source_url as sourceUrl, compressed_path as compressedPath, width, height, size_bytes as sizeBytes, sha256, downloaded_at as downloadedAt FROM cached_images ORDER BY item_id ASC, image_index ASC`).all() as CachedImageRecord[];
+export function listAllItemImages(db: PipelineDatabase): ItemImageRecord[] {
+  return db.prepare(`SELECT image_key as imageKey, item_id as itemId, image_index as imageIndex, source_url as sourceUrl, width, height, size_bytes as sizeBytes, sha256, processed_at as processedAt FROM item_images ORDER BY item_id ASC, image_index ASC`).all() as ItemImageRecord[];
 }
 
 export function upsertNormalizedItem(db: PipelineDatabase, record: NormalizedItemRecord): void {

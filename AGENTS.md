@@ -5,9 +5,9 @@
 - `api/chat.ts` is a **thin OpenAI-compatible proxy**. It accepts request-time provider configuration and user API keys, but must not persist those keys.
 - `src/lib/appwrite/*` contains Appwrite config/models/client helpers.
 - `src/lib/repositories/*` contains backend-agnostic repository interfaces plus the current Appwrite implementations.
-- `src/lib/pipeline/*` contains the local knowledge-base pipeline: SQLite storage, BOOTH adapters, image caching/compression, normalization, enrichment, embeddings, and retrieval helpers.
+- `src/lib/pipeline/*` contains the local knowledge-base pipeline: SQLite storage, BOOTH adapters, transient image download/compression, normalization, enrichment, embeddings, and retrieval helpers.
 - `scripts/sync/*` and `scripts/knowledge/*` are the primary Phase 1 execution surface. Prefer these local scripts over adding cloud workers.
-- `data/` is local pipeline output (SQLite DBs, cached images, smoke-test artifacts) and should stay ignored.
+- `data/` is local pipeline output (SQLite DBs and smoke-test artifacts) and should stay ignored.
 - `docs/superpowers/*` holds the approved Phase 1 local-first spec/plan.
 
 ## Build, Test, and Development Commands
@@ -18,7 +18,7 @@
 - `npx tsc --noEmit` — run type-check verification.
 - `npm run build` — build the frontend bundle.
 - `npm run appwrite:bootstrap` — create/verify Appwrite collections and attributes.
-- `npm run sync:run` — manually crawl BOOTH 3D Models into the local SQLite + image cache pipeline and optionally publish compact catalog data to Appwrite.
+- `npm run sync:run` — manually crawl BOOTH 3D Models into the local SQLite pipeline, process image metadata transiently, and optionally publish compact catalog data to Appwrite.
 - `npm run knowledge:caption|ocr|extract|embed-text|embed-images|test-retrieval` — run local Phase 1B/1C stages.
 
 ## Coding Style & Naming Conventions
@@ -41,7 +41,7 @@
 ## Security & Configuration Tips
 - Keep `APPWRITE_API_KEY` server-side only. Never expose it to the browser.
 - User-supplied LLM API keys must remain **browser-local by default**. They may be sent request-time to `/api/chat`, but must not be persisted in Appwrite.
-- Treat local SQLite DBs and cached images as knowledge-base assets; keep them out of the repo and back them up separately if needed.
+- Treat local SQLite DBs as knowledge-base assets; keep them out of the repo and back them up separately if needed.
 
 ## Product Direction & Long-Term Roadmap (2026-03-18)
 
@@ -262,7 +262,7 @@ Phase 1 is intentionally split into three local-first subphases:
   - **BOOTH**
   - **all items in the 3D Models category**
 - Raw crawl data and pipeline state live in **local SQLite**.
-- Cached image bodies live on the **local filesystem** and are compressed before storage.
+- Product images are downloaded **transiently** when needed, compressed in-memory, and discarded after metadata/derived results are produced.
 - Do not store images as base64 in database tables by default.
 
 ### Current Phase 1 implementation choices
@@ -285,5 +285,5 @@ Phase 1 is intentionally split into three local-first subphases:
 ### Validation preference
 
 - During Phase 1, prioritize **database construction and validation scripts** over polished user interaction.
-- Favor verification that proves the local DB, local cache, and retrieval outputs are internally consistent.
+- Favor verification that proves the local DB, transient image-processing path, and retrieval outputs are internally consistent.
 - Local smoke scripts are part of the required verification surface, not optional extras.

@@ -3,9 +3,9 @@
 - Replaced the discarded Supabase-heavy Phase 1 direction with a local-first Appwrite architecture.
 - Added Appwrite-backed auth, chat, and settings repositories plus a compact catalog publish target.
 - Added a thin `/api/chat` proxy that accepts request-time provider config and never persists user LLM API keys.
-- Added a local SQLite pipeline for raw BOOTH backups, normalized catalog storage, image cache metadata, knowledge extraction state, and embeddings.
+- Added a local SQLite pipeline for raw BOOTH backups, normalized catalog storage, transient image-processing metadata, knowledge extraction state, and embeddings.
 - Added manual BOOTH sync, caption, OCR, structured extraction, text embedding, image embedding, and retrieval validation scripts.
-- Added automated tests for Appwrite config, chat proxy behavior, SQLite pipeline state, image cache, normalization, structured extraction, embeddings, and retrieval ranking.
+- Added automated tests for Appwrite config, chat proxy behavior, SQLite pipeline state, transient image processing, normalization, structured extraction, embeddings, and retrieval ranking.
 
 ### Design Rationale
 - The project is intended to be a practical low-cost tool, so Phase 1 was reset to a local-first architecture instead of a product-grade cloud sync platform.
@@ -18,3 +18,4 @@
 - OCR supports both `noop` mode for fast smoke tests and `tesseract` mode for real extraction.
 - Local embedding models are intentionally simple (`local-hash-v1`, `local-pixel-v1`) and are meant as a Phase 1 validation baseline, not the final retrieval quality ceiling.
 - Publishing normalized catalog data to Appwrite requires valid server-side Appwrite environment variables and a project API key.
+- Product images no longer need persistent local backups by default; the pipeline can download, process, and discard them while keeping URLs plus derived results.
