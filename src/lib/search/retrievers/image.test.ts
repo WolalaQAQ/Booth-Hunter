@@ -105,3 +105,40 @@ test("image retriever allows default grouped ranking weights to be configured", 
 
   assert.equal(result.candidates[0]?.itemId, "item-2");
 });
+
+test("image retriever can rerank grouped candidates after fusion", async () => {
+  const calls: string[] = [];
+  const retriever = createImageRetriever({
+    embedQuery: async () => {
+      calls.push("embed");
+      return [0.4, 0.5];
+    },
+    denseSearch: async () => {
+      calls.push("dense");
+      return [
+        { itemId: "item-1", assetId: "item-1:image:0", score: 0.95, source: "dense_image" },
+        { itemId: "item-2", assetId: "item-2:image:0", score: 0.88, source: "dense_image" },
+      ];
+    },
+    groupCandidates: (evidence) => {
+      calls.push(`group:${evidence.length}`);
+      return [
+        { itemId: "item-1", score: 0.95, evidence: evidence.filter((entry) => entry.itemId === "item-1") },
+        { itemId: "item-2", score: 0.88, evidence: evidence.filter((entry) => entry.itemId === "item-2") },
+      ];
+    },
+    rerankCandidates: async (candidates, query) => {
+      calls.push(`rerank:${query.imagePath}:${candidates.length}`);
+      return [
+        { ...candidates[1]!, score: 0.98 },
+        { ...candidates[0]!, score: 0.4 },
+      ];
+    },
+  });
+
+  const result = await retriever.search({ imagePath: "C:/tmp/query.png", limit: 5 });
+
+  assert.deepEqual(calls, ["embed", "dense", "group:2", "rerank:C:/tmp/query.png:2"]);
+  assert.equal(result.candidates[0]?.itemId, "item-2");
+  assert.equal(result.candidates[0]?.score, 0.98);
+});

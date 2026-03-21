@@ -1,6 +1,8 @@
 import path from "node:path";
 import { spawn } from "node:child_process";
 
+import { loadLocalEnv } from "../../env/local";
+
 export const MULTIMODAL_SHARED_SPACE = "multimodal-shared";
 
 export type EmbeddingResponse = {
@@ -12,6 +14,12 @@ export type EmbeddingResponse = {
 export type RerankRequest = {
   query: { text?: string; image?: string };
   documents: Array<{ text?: string; image?: string }>;
+  instruction?: string;
+};
+
+export type RerankResponse = {
+  model: string;
+  scores: number[];
 };
 
 export type PythonRunnerInput = {
@@ -76,6 +84,14 @@ function parseEmbeddingResponse(stdout: string): EmbeddingResponse {
   return parsed;
 }
 
+function parseRerankResponse(stdout: string): RerankResponse {
+  const parsed = JSON.parse(stdout) as RerankResponse;
+  if (!parsed.model || !Array.isArray(parsed.scores)) {
+    throw new Error("Invalid rerank response payload");
+  }
+  return parsed;
+}
+
 function chunkInputs<T>(inputs: T[], batchSize: number): T[][] {
   const chunks: T[][] = [];
   for (let index = 0; index < inputs.length; index += batchSize) {
@@ -85,6 +101,7 @@ function chunkInputs<T>(inputs: T[], batchSize: number): T[][] {
 }
 
 export function createPythonEmbeddingProvider(options: PythonEmbeddingProviderOptions = {}) {
+  loadLocalEnv();
   const runner = options.runner || execPython;
   const pythonBin = options.pythonBin || process.env.EMBED_PYTHON_BIN || "python";
   const scriptPath = options.scriptPath || process.env.EMBED_SCRIPT_PATH || defaultScriptPath();
@@ -94,24 +111,25 @@ export function createPythonEmbeddingProvider(options: PythonEmbeddingProviderOp
   const batchSize = options.batchSize || Number(process.env.EMBED_BATCH_SIZE || "4");
 
   async function invoke(commandName: string, payload: Record<string, unknown>) {
-    const stdout = await runner({
+    return await runner({
       command: pythonBin,
       args: [scriptPath, commandName],
       stdin: JSON.stringify(payload),
     });
-    return parseEmbeddingResponse(stdout);
   }
 
   async function embedInBatches(inputs: MultimodalInput[]) {
     const vectors: number[][] = [];
     let model = qwenEmbeddingModelId;
     for (const batch of chunkInputs(inputs, Math.max(1, batchSize))) {
-      const response = await invoke("qwen-embed", {
-        inputs: batch,
-        modelId: qwenEmbeddingModelId,
-        embeddingSpace: MULTIMODAL_SHARED_SPACE,
-        device,
-      });
+      const response = parseEmbeddingResponse(
+        await invoke("qwen-embed", {
+          inputs: batch,
+          modelId: qwenEmbeddingModelId,
+          embeddingSpace: MULTIMODAL_SHARED_SPACE,
+          device,
+        })
+      );
       model = response.model;
       vectors.push(...response.vectors);
     }
@@ -128,10 +146,24 @@ export function createPythonEmbeddingProvider(options: PythonEmbeddingProviderOp
     async embedMixed(inputs: MultimodalInput[]) {
       return embedInBatches(inputs);
     },
-    async rerank(_request: RerankRequest) {
-      throw new Error(
-        `Qwen reranker interface is reserved but not enabled yet. Configure ${qwenRerankerModelId} in a later phase.`
+    async rerank(request: RerankRequest) {
+      const response = parseRerankResponse(
+        await invoke("qwen-rerank", {
+          query: request.query,
+          documents: request.documents,
+          instruction: request.instruction,
+          modelId: qwenRerankerModelId,
+          device,
+        })
       );
+
+      if (response.scores.length !== request.documents.length) {
+        throw new Error(
+          `Reranker returned ${response.scores.length} scores for ${request.documents.length} documents.`
+        );
+      }
+
+      return response;
     },
   };
 }

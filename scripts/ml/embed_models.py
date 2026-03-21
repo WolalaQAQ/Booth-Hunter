@@ -17,6 +17,7 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 from qwen_vl_utils.vision_process import process_vision_info
+from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
 from transformers.cache_utils import Cache
 from transformers.modeling_outputs import ModelOutput
 from transformers.models.qwen3_vl.modeling_qwen3_vl import (
@@ -207,9 +208,130 @@ class Qwen3VLEmbedder:
         return embeddings
 
 
+def _normalize_image_input(image: Optional[Union[str, Image.Image]]):
+    if not image:
+        return None
+    if isinstance(image, str):
+        return image if image.startswith(("http", "https", "oss", "file://")) else "file://" + image
+    return image
+
+
+class Qwen3VLReranker:
+    def __init__(
+        self,
+        model_name_or_path: str,
+        device: str,
+        max_length: int = MAX_LENGTH,
+        instruction: Optional[str] = None,
+        min_pixels: int = MIN_PIXELS,
+        max_pixels: int = MAX_PIXELS,
+    ):
+        self.device = torch.device(device)
+        self.max_length = max_length
+        self.instruction = instruction or "Judge whether the BOOTH candidate item matches the query."
+        self.min_pixels = min_pixels
+        self.max_pixels = max_pixels
+        self.model = Qwen3VLForConditionalGeneration.from_pretrained(
+            model_name_or_path,
+            trust_remote_code=True,
+            torch_dtype=_torch_dtype(device),
+        ).to(self.device)
+        self.processor = AutoProcessor.from_pretrained(
+            model_name_or_path,
+            padding_side="left",
+        )
+        self.model.eval()
+        self.yes_token_id = self._single_token_id("yes")
+        self.no_token_id = self._single_token_id("no")
+
+    def _single_token_id(self, token_text: str) -> int:
+        token_ids = self.processor.tokenizer.encode(token_text, add_special_tokens=False)
+        if len(token_ids) != 1:
+            raise ValueError(f"Expected a single token id for '{token_text}', got {token_ids}")
+        return token_ids[0]
+
+    def format_model_input(
+        self,
+        query: Dict[str, Any],
+        document: Dict[str, Any],
+        instruction: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        local_instruction = (instruction or self.instruction).strip()
+        if local_instruction and not unicodedata.category(local_instruction[-1]).startswith("P"):
+            local_instruction = local_instruction + "."
+
+        content = []
+        if query.get("image"):
+            content.append(
+                {
+                    "type": "image",
+                    "image": _normalize_image_input(query.get("image")),
+                    "min_pixels": self.min_pixels,
+                    "max_pixels": self.max_pixels,
+                }
+            )
+        if query.get("text"):
+            content.append({"type": "text", "text": f"Query: {query.get('text')}"})
+
+        if document.get("image"):
+            content.append(
+                {
+                    "type": "image",
+                    "image": _normalize_image_input(document.get("image")),
+                    "min_pixels": self.min_pixels,
+                    "max_pixels": self.max_pixels,
+                }
+            )
+        if document.get("text"):
+            content.append({"type": "text", "text": f"Candidate: {document.get('text')}"})
+
+        if not content:
+            content.append({"type": "text", "text": ""})
+
+        return [
+            {"role": "system", "content": [{"type": "text", "text": local_instruction}]},
+            {"role": "user", "content": content},
+        ]
+
+    def _preprocess_inputs(self, conversation: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+        text = self.processor.apply_chat_template(
+            [conversation],
+            add_generation_prompt=True,
+            tokenize=False,
+        )
+        images, videos = process_vision_info([conversation], image_patch_size=16)
+        inputs = self.processor(
+            text=text,
+            images=images,
+            videos=videos,
+            truncation=True,
+            max_length=self.max_length,
+            padding=True,
+            do_resize=False,
+            return_tensors="pt",
+        )
+        return {key: value.to(self.device) for key, value in inputs.items()}
+
+    @torch.no_grad()
+    def score(self, query: Dict[str, Any], documents: List[Dict[str, Any]], instruction: Optional[str] = None) -> List[float]:
+        scores = []
+        for document in documents:
+            conversation = self.format_model_input(query, document, instruction=instruction)
+            inputs = self._preprocess_inputs(conversation)
+            logits = self.model(**inputs).logits[:, -1, [self.no_token_id, self.yes_token_id]]
+            probabilities = torch.softmax(logits, dim=-1)[:, 1]
+            scores.extend(float(value) for value in probabilities.detach().cpu().tolist())
+        return scores
+
+
 @lru_cache(maxsize=4)
 def _load_embedder(model_id: str, device: str):
     return Qwen3VLEmbedder(model_id, device=device)
+
+
+@lru_cache(maxsize=2)
+def _load_reranker(model_id: str, device: str):
+    return Qwen3VLReranker(model_id, device=device)
 
 
 def _emit(model: str, embedding_space: str, vectors):
@@ -230,6 +352,18 @@ def _emit(model: str, embedding_space: str, vectors):
     )
 
 
+def _emit_rerank(model: str, scores):
+    sys.stdout.write(
+        json.dumps(
+            {
+                "model": model,
+                "scores": [float(score) for score in scores],
+            },
+            ensure_ascii=False,
+        )
+    )
+
+
 def qwen_embed():
     payload = _read_payload()
     model_id = payload["modelId"]
@@ -241,14 +375,27 @@ def qwen_embed():
     _emit(model_id, embedding_space, vectors)
 
 
+def qwen_rerank():
+    payload = _read_payload()
+    model_id = payload["modelId"]
+    query = payload["query"]
+    documents = payload["documents"]
+    instruction = payload.get("instruction")
+    device = _device(payload)
+    reranker = _load_reranker(model_id, device)
+    scores = reranker.score(query, documents, instruction=instruction)
+    _emit_rerank(model_id, scores)
+
+
 COMMANDS = {
     "qwen-embed": qwen_embed,
+    "qwen-rerank": qwen_rerank,
 }
 
 
 def main():
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
-        raise SystemExit("Usage: embed_models.py <qwen-embed>")
+        raise SystemExit("Usage: embed_models.py <qwen-embed|qwen-rerank>")
     COMMANDS[sys.argv[1]]()
 
 

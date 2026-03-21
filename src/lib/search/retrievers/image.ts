@@ -7,6 +7,7 @@ export type ImageRetrieverDependencies = {
   denseSearch: (vector: number[], query: ImageSearchQuery) => Promise<SearchEvidence[]>;
   lexicalSearch?: (text: string, query: ImageSearchQuery) => Promise<SearchEvidence[]>;
   groupCandidates?: (evidence: SearchEvidence[], limit: number, query: ImageSearchQuery) => SearchCandidate[];
+  rerankCandidates?: (candidates: SearchCandidate[], query: ImageSearchQuery) => Promise<SearchCandidate[]>;
   fusionWeights?: FusionWeights;
 };
 
@@ -23,12 +24,15 @@ export function createImageRetriever(dependencies: ImageRetrieverDependencies) {
       const lexicalEvidence =
         dependencies.lexicalSearch && query.text ? await dependencies.lexicalSearch(query.text, query) : [];
       const mergedEvidence = [...evidence, ...lexicalEvidence];
-      const candidates = (dependencies.groupCandidates ||
+      const groupedCandidates = (dependencies.groupCandidates ||
         ((records, limit) => groupSearchCandidates(records, { limit, weights: dependencies.fusionWeights })))(
         mergedEvidence,
         query.limit ?? 10,
         query
       );
+      const candidates = dependencies.rerankCandidates
+        ? await dependencies.rerankCandidates(groupedCandidates, query)
+        : groupedCandidates;
 
       return {
         query,

@@ -7,6 +7,7 @@ export type TextRetrieverDependencies = {
   denseSearch: (vector: number[], query: TextSearchQuery) => Promise<SearchEvidence[]>;
   lexicalSearch?: (text: string, query: TextSearchQuery) => Promise<SearchEvidence[]>;
   groupCandidates?: (evidence: SearchEvidence[], limit: number, query: TextSearchQuery) => SearchCandidate[];
+  rerankCandidates?: (candidates: SearchCandidate[], query: TextSearchQuery) => Promise<SearchCandidate[]>;
   fusionWeights?: FusionWeights;
 };
 
@@ -22,12 +23,15 @@ export function createTextRetriever(dependencies: TextRetrieverDependencies) {
       const evidence = await dependencies.denseSearch(vector, query);
       const lexicalEvidence = dependencies.lexicalSearch ? await dependencies.lexicalSearch(query.text, query) : [];
       const mergedEvidence = [...evidence, ...lexicalEvidence];
-      const candidates = (dependencies.groupCandidates ||
+      const groupedCandidates = (dependencies.groupCandidates ||
         ((records, limit) => groupSearchCandidates(records, { limit, weights: dependencies.fusionWeights })))(
         mergedEvidence,
         query.limit ?? 10,
         query
       );
+      const candidates = dependencies.rerankCandidates
+        ? await dependencies.rerankCandidates(groupedCandidates, query)
+        : groupedCandidates;
 
       return {
         query,

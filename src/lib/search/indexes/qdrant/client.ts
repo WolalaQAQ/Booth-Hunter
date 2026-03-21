@@ -1,5 +1,7 @@
 import { QdrantClient } from "@qdrant/js-client-rest";
 
+import { loadLocalEnv } from "../../../env/local";
+
 export type QdrantEnv = Record<string, string | undefined>;
 
 export type QdrantConfig = {
@@ -19,6 +21,9 @@ function required(name: keyof QdrantEnv, env: QdrantEnv): string | undefined {
 }
 
 export function getQdrantConfig(env: QdrantEnv = process.env): QdrantConfig {
+  if (env === process.env) {
+    loadLocalEnv();
+  }
   const missing = ["QDRANT_URL", "QDRANT_COLLECTION_ASSETS", "QDRANT_COLLECTION_ITEMS"].filter(
     (name) => !required(name, env)
   );

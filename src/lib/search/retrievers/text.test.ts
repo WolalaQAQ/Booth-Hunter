@@ -106,3 +106,40 @@ test("text retriever allows default grouped ranking weights to be configured", a
 
   assert.equal(result.candidates[0]?.itemId, "item-2");
 });
+
+test("text retriever can rerank grouped candidates after fusion", async () => {
+  const calls: string[] = [];
+  const retriever = createTextRetriever({
+    embedQuery: async () => {
+      calls.push("embed");
+      return [1, 2, 3];
+    },
+    denseSearch: async () => {
+      calls.push("dense");
+      return [
+        { itemId: "item-1", assetId: "item-1:text", score: 0.91, source: "dense_text" },
+        { itemId: "item-2", assetId: "item-2:text", score: 0.83, source: "dense_text" },
+      ];
+    },
+    groupCandidates: (evidence) => {
+      calls.push(`group:${evidence.length}`);
+      return [
+        { itemId: "item-1", score: 0.91, evidence: evidence.filter((entry) => entry.itemId === "item-1") },
+        { itemId: "item-2", score: 0.83, evidence: evidence.filter((entry) => entry.itemId === "item-2") },
+      ];
+    },
+    rerankCandidates: async (candidates, query) => {
+      calls.push(`rerank:${query.text}:${candidates.length}`);
+      return [
+        { ...candidates[1]!, score: 0.99 },
+        { ...candidates[0]!, score: 0.5 },
+      ];
+    },
+  });
+
+  const result = await retriever.search({ text: "kikyo maid outfit", limit: 5 });
+
+  assert.deepEqual(calls, ["embed", "dense", "group:2", "rerank:kikyo maid outfit:2"]);
+  assert.equal(result.candidates[0]?.itemId, "item-2");
+  assert.equal(result.candidates[0]?.score, 0.99);
+});

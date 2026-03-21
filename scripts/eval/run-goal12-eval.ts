@@ -17,6 +17,10 @@ function argument(name: string, fallback?: string): string | undefined {
   return match ? match.slice(prefixed.length) : fallback;
 }
 
+function booleanFlag(name: string): boolean {
+  return process.argv.includes(`--${name}`) || argument(name, "false") === "true";
+}
+
 function ensureParentDirectory(filePath: string) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
 }
@@ -41,6 +45,8 @@ async function main() {
   const outputPath = argument("output", "data/eval/goal12-eval.json")!;
   const embeddingSpace = argument("embedding-space", MULTIMODAL_SHARED_SPACE)!;
   const ks = parseKs(argument("ks"));
+  const rerank = booleanFlag("rerank");
+  const rerankTopK = Number(argument("rerank-top-k", "10") || "10");
   const db = openPipelineDatabase(dbPath);
 
   try {
@@ -50,8 +56,20 @@ async function main() {
     const imageEmbedMode =
       requestedEmbedMode || (getLatestImageEmbeddingModel(db)?.startsWith("local-pixel") ? "local" : "python");
     const qdrantConfig = getQdrantConfig();
-    const textRetriever = createRuntimeTextRetriever({ db, qdrantConfig, embedMode: textEmbedMode });
-    const imageRetriever = createRuntimeImageRetriever({ db, qdrantConfig, embedMode: imageEmbedMode });
+    const textRetriever = createRuntimeTextRetriever({
+      db,
+      qdrantConfig,
+      embedMode: textEmbedMode,
+      enableReranker: rerank,
+      rerankTopK,
+    });
+    const imageRetriever = createRuntimeImageRetriever({
+      db,
+      qdrantConfig,
+      embedMode: imageEmbedMode,
+      enableReranker: rerank,
+      rerankTopK,
+    });
     const benchmark =
       loadBenchmark(benchmarkPath) ||
       buildGoal12BenchmarkScaffold({
@@ -80,6 +98,8 @@ async function main() {
         benchmarkPath: fs.existsSync(benchmarkPath) ? benchmarkPath : undefined,
         textEmbedMode,
         imageEmbedMode,
+        rerank,
+        rerankTopK,
       },
     };
 
