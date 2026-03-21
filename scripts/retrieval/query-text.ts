@@ -1,7 +1,7 @@
 import { getLatestItemTextEmbeddingModel, openPipelineDatabase } from "../../src/lib/pipeline/sqlite/db";
 import { getQdrantConfig } from "../../src/lib/search/indexes/qdrant/client";
-import { ensureQdrantAvailable } from "../../src/lib/search/indexes/qdrant/ensure";
 import { createRuntimeTextRetriever } from "../../src/lib/search/runtime";
+import { ensureRuntimeQdrantReady } from "./runtime-qdrant";
 
 function argument(name: string, fallback?: string): string | undefined {
   const prefixed = `--${name}=`;
@@ -23,7 +23,11 @@ async function main() {
 
   try {
     const qdrantConfig = getQdrantConfig();
-    await ensureQdrantAvailable(qdrantConfig);
+    await ensureRuntimeQdrantReady({
+      db,
+      dbPath,
+      qdrantConfig,
+    });
     const embedMode =
       (argument("embed-mode") as "python" | "local" | undefined) ||
       (getLatestItemTextEmbeddingModel(db)?.startsWith("local-hash") ? "local" : "python");

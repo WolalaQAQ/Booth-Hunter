@@ -8,9 +8,9 @@ import {
 } from "../../src/lib/pipeline/sqlite/db";
 import { Goal12Benchmark, evaluateGoal12Benchmark } from "../../src/lib/search/evaluate";
 import { getQdrantConfig } from "../../src/lib/search/indexes/qdrant/client";
-import { ensureQdrantAvailable } from "../../src/lib/search/indexes/qdrant/ensure";
 import { createRuntimeImageRetriever, createRuntimeTextRetriever, MULTIMODAL_SHARED_SPACE } from "../../src/lib/search/runtime";
 import { buildGoal12BenchmarkScaffold } from "./goal12-benchmark-lib";
+import { ensureRuntimeQdrantReady } from "../retrieval/runtime-qdrant";
 
 function argument(name: string, fallback?: string): string | undefined {
   const prefixed = `--${name}=`;
@@ -57,7 +57,12 @@ async function main() {
     const imageEmbedMode =
       requestedEmbedMode || (getLatestImageEmbeddingModel(db)?.startsWith("local-pixel") ? "local" : "python");
     const qdrantConfig = getQdrantConfig();
-    await ensureQdrantAvailable(qdrantConfig);
+    await ensureRuntimeQdrantReady({
+      db,
+      dbPath,
+      qdrantConfig,
+      embeddingSpace,
+    });
     const textRetriever = createRuntimeTextRetriever({
       db,
       qdrantConfig,
