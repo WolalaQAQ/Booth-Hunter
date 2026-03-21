@@ -1,6 +1,7 @@
 import { MULTIMODAL_SHARED_SPACE } from "../../src/lib/pipeline/embed/provider";
 import { listNormalizedItemIds, openPipelineDatabase } from "../../src/lib/pipeline/sqlite/db";
 import { createQdrantClient, getQdrantConfig } from "../../src/lib/search/indexes/qdrant/client";
+import { ensureQdrantAvailable } from "../../src/lib/search/indexes/qdrant/ensure";
 import { createQdrantIndexer, QdrantIndexerClient } from "../../src/lib/search/indexes/qdrant/indexer";
 import { projectAssetPoints, projectItemPoint } from "../../src/lib/search/indexes/qdrant/projectors";
 import { QdrantAssetPoint, QdrantItemPoint } from "../../src/lib/search/indexes/qdrant/schema";
@@ -35,6 +36,7 @@ async function main() {
 
   try {
     const config = getQdrantConfig();
+    await ensureQdrantAvailable(config);
     const client = createQdrantClient(config) as unknown as QdrantIndexerClient;
     const indexer = createQdrantIndexer({
       client,

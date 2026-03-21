@@ -13,6 +13,15 @@ export type QdrantConfig = {
   };
 };
 
+const LOCAL_QDRANT_DEFAULTS = {
+  url: "http://127.0.0.1:6333",
+  apiKey: undefined,
+  collections: {
+    assets: "booth_assets",
+    items: "booth_items",
+  },
+} as const;
+
 type QdrantClientConstructor<TClient> = new (options: { url: string; apiKey?: string }) => TClient;
 
 function required(name: keyof QdrantEnv, env: QdrantEnv): string | undefined {
@@ -23,6 +32,21 @@ function required(name: keyof QdrantEnv, env: QdrantEnv): string | undefined {
 export function getQdrantConfig(env: QdrantEnv = process.env): QdrantConfig {
   if (env === process.env) {
     loadLocalEnv();
+  }
+  if (
+    env === process.env &&
+    !required("QDRANT_URL", env) &&
+    !required("QDRANT_COLLECTION_ASSETS", env) &&
+    !required("QDRANT_COLLECTION_ITEMS", env)
+  ) {
+    return {
+      url: LOCAL_QDRANT_DEFAULTS.url,
+      apiKey: LOCAL_QDRANT_DEFAULTS.apiKey,
+      collections: {
+        assets: LOCAL_QDRANT_DEFAULTS.collections.assets,
+        items: LOCAL_QDRANT_DEFAULTS.collections.items,
+      },
+    };
   }
   const missing = ["QDRANT_URL", "QDRANT_COLLECTION_ASSETS", "QDRANT_COLLECTION_ITEMS"].filter(
     (name) => !required(name, env)

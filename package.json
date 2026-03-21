@@ -16,6 +16,7 @@
     "knowledge:embed-text": "tsx scripts/knowledge/embed-text.ts",
     "knowledge:embed-images": "tsx scripts/knowledge/embed-images.ts",
     "knowledge:test-retrieval": "tsx scripts/knowledge/test-retrieval.ts",
+    "qdrant:start": "tsx scripts/qdrant/start.ts",
     "retrieval:bootstrap-qdrant": "tsx scripts/retrieval/bootstrap-qdrant.ts",
     "retrieval:index-assets": "tsx scripts/retrieval/index-assets.ts",
     "retrieval:query-text": "tsx scripts/retrieval/query-text.ts",

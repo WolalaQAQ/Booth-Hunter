@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { createQdrantClient, getQdrantConfig } from "./client";
 
-test("getQdrantConfig requires url and collection names", () => {
+test("getQdrantConfig requires url and collection names for explicit env objects", () => {
   assert.throws(
     () =>
       getQdrantConfig({
@@ -11,6 +11,37 @@ test("getQdrantConfig requires url and collection names", () => {
       }),
     /QDRANT_COLLECTION_ASSETS, QDRANT_COLLECTION_ITEMS/
   );
+});
+
+test("getQdrantConfig falls back to local development defaults for process env", () => {
+  const snapshot = {
+    QDRANT_URL: process.env.QDRANT_URL,
+    QDRANT_COLLECTION_ASSETS: process.env.QDRANT_COLLECTION_ASSETS,
+    QDRANT_COLLECTION_ITEMS: process.env.QDRANT_COLLECTION_ITEMS,
+    QDRANT_API_KEY: process.env.QDRANT_API_KEY,
+  };
+
+  delete process.env.QDRANT_URL;
+  delete process.env.QDRANT_COLLECTION_ASSETS;
+  delete process.env.QDRANT_COLLECTION_ITEMS;
+  delete process.env.QDRANT_API_KEY;
+
+  try {
+    const config = getQdrantConfig();
+    assert.equal(config.url, "http://127.0.0.1:6333");
+    assert.equal(config.collections.items, "booth_items");
+    assert.equal(config.collections.assets, "booth_assets");
+    assert.equal(config.apiKey, undefined);
+  } finally {
+    if (snapshot.QDRANT_URL === undefined) delete process.env.QDRANT_URL;
+    else process.env.QDRANT_URL = snapshot.QDRANT_URL;
+    if (snapshot.QDRANT_COLLECTION_ASSETS === undefined) delete process.env.QDRANT_COLLECTION_ASSETS;
+    else process.env.QDRANT_COLLECTION_ASSETS = snapshot.QDRANT_COLLECTION_ASSETS;
+    if (snapshot.QDRANT_COLLECTION_ITEMS === undefined) delete process.env.QDRANT_COLLECTION_ITEMS;
+    else process.env.QDRANT_COLLECTION_ITEMS = snapshot.QDRANT_COLLECTION_ITEMS;
+    if (snapshot.QDRANT_API_KEY === undefined) delete process.env.QDRANT_API_KEY;
+    else process.env.QDRANT_API_KEY = snapshot.QDRANT_API_KEY;
+  }
 });
 
 test("getQdrantConfig reads valid settings and createQdrantClient forwards them", () => {

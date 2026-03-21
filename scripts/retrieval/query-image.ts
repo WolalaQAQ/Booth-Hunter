@@ -1,5 +1,6 @@
 import { getLatestImageEmbeddingModel, listAllItemImages, openPipelineDatabase } from "../../src/lib/pipeline/sqlite/db";
 import { getQdrantConfig } from "../../src/lib/search/indexes/qdrant/client";
+import { ensureQdrantAvailable } from "../../src/lib/search/indexes/qdrant/ensure";
 import { createRuntimeImageRetriever } from "../../src/lib/search/runtime";
 
 function argument(name: string, fallback?: string): string | undefined {
@@ -35,12 +36,14 @@ async function main() {
   const db = openPipelineDatabase(dbPath);
 
   try {
+    const qdrantConfig = getQdrantConfig();
+    await ensureQdrantAvailable(qdrantConfig);
     const embedMode =
       (argument("embed-mode") as "python" | "local" | undefined) ||
       (getLatestImageEmbeddingModel(db)?.startsWith("local-pixel") ? "local" : "python");
     const retriever = createRuntimeImageRetriever({
       db,
-      qdrantConfig: getQdrantConfig(),
+      qdrantConfig,
       embedMode,
       enableReranker: rerank,
       rerankTopK,
