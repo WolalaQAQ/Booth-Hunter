@@ -28,6 +28,8 @@ todo
 booth_crawler
 data/
 cache/
+.tmp/
+.tools/
 *.db
 *.sqlite
 *.sqlite3

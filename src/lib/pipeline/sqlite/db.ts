@@ -49,8 +49,51 @@ export type StructuredItemRecord = {
   updatedAt: string;
 };
 
+export type LexicalDocumentRecord = {
+  itemId: string;
+  title: string;
+  description: string;
+  tags: string;
+  normalizedText: string;
+  shopName: string;
+  categoryName: string;
+  parentCategoryName: string;
+  priceText: string;
+  captionText: string;
+  ocrText: string;
+  parts: string;
+  styles: string;
+  compatibilityHints: string;
+  keywordDigest: string;
+};
+
+const DEFAULT_EMBEDDING_SPACE = 'multimodal-shared';
+
 function ensureParentDirectory(filePath: string) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
+}
+
+function hasColumn(db: PipelineDatabase, tableName: string, columnName: string): boolean {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+  return columns.some((column) => column.name === columnName);
+}
+
+function ensureEmbeddingTableCompatibility(
+  db: PipelineDatabase,
+  tableName: 'item_text_embeddings' | 'image_embeddings',
+  idColumn: 'item_id' | 'image_key'
+) {
+  if (!hasColumn(db, tableName, 'embedding_space')) {
+    db.exec(`
+      ALTER TABLE ${tableName}
+      ADD COLUMN embedding_space TEXT NOT NULL DEFAULT '${DEFAULT_EMBEDDING_SPACE}'
+    `);
+  }
+
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS ${tableName}_${idColumn}_embedding_space_idx
+    ON ${tableName} (${idColumn}, embedding_space)
+  `);
 }
 
 export function openPipelineDatabase(filePath: string): PipelineDatabase {
@@ -58,6 +101,17 @@ export function openPipelineDatabase(filePath: string): PipelineDatabase {
   const db = new BetterSqlite3(filePath);
   db.pragma('journal_mode = WAL');
   db.exec(PIPELINE_SCHEMA);
+  ensureEmbeddingTableCompatibility(db, 'item_text_embeddings', 'item_id');
+  ensureEmbeddingTableCompatibility(db, 'image_embeddings', 'image_key');
+  const normalizedItemCount = Number(
+    (db.prepare(`SELECT COUNT(*) as count FROM normalized_items`).get() as { count: number }).count || 0
+  );
+  const lexicalDocumentCount = Number(
+    (db.prepare(`SELECT COUNT(*) as count FROM item_lexical_fts`).get() as { count: number }).count || 0
+  );
+  if (normalizedItemCount > 0 && lexicalDocumentCount < normalizedItemCount) {
+    rebuildLexicalIndex(db);
+  }
   return db;
 }
 
@@ -112,6 +166,7 @@ export function upsertNormalizedItem(db: PipelineDatabase, record: NormalizedIte
       content_hash = excluded.content_hash,
       updated_at = excluded.updated_at
   `).run(record);
+  refreshLexicalIndexForItem(db, record.itemId);
 }
 
 export function getNormalizedItem(db: PipelineDatabase, itemId: string): NormalizedItemRecord | undefined {
@@ -120,6 +175,14 @@ export function getNormalizedItem(db: PipelineDatabase, itemId: string): Normali
 
 export function listNormalizedItems(db: PipelineDatabase, limit = 100): NormalizedItemRecord[] {
   return db.prepare(`SELECT item_id as itemId, normalized_json as normalizedJson, content_hash as contentHash, updated_at as updatedAt FROM normalized_items ORDER BY updated_at DESC LIMIT ?`).all(limit) as NormalizedItemRecord[];
+}
+
+export function listAllNormalizedItems(db: PipelineDatabase): NormalizedItemRecord[] {
+  return db.prepare(`SELECT item_id as itemId, normalized_json as normalizedJson, content_hash as contentHash, updated_at as updatedAt FROM normalized_items ORDER BY item_id ASC`).all() as NormalizedItemRecord[];
+}
+
+export function listNormalizedItemIds(db: PipelineDatabase): string[] {
+  return db.prepare(`SELECT item_id as itemId FROM normalized_items ORDER BY item_id ASC`).all().map((row) => String((row as { itemId: string }).itemId));
 }
 
 export function saveImageAnalysis(db: PipelineDatabase, record: ImageAnalysisRecord): void {
@@ -135,6 +198,7 @@ export function saveImageAnalysis(db: PipelineDatabase, record: ImageAnalysisRec
     captionText: record.captionText ?? null,
     ocrText: record.ocrText ?? null,
   });
+  refreshLexicalIndexForItem(db, record.itemId);
 }
 
 export function getImageAnalysis(db: PipelineDatabase, imageKey: string): ImageAnalysisRecord | undefined {
@@ -153,6 +217,7 @@ export function saveStructuredItem(db: PipelineDatabase, record: StructuredItemR
       structured_json = excluded.structured_json,
       updated_at = excluded.updated_at
   `).run(record);
+  refreshLexicalIndexForItem(db, record.itemId);
 }
 
 export function getStructuredItem(db: PipelineDatabase, itemId: string): StructuredItemRecord | undefined {
@@ -182,6 +247,14 @@ export function listItemTextEmbeddingsBySpace(db: PipelineDatabase, embeddingSpa
   return db.prepare(`SELECT item_id as itemId, embedding_space as embeddingSpace, model, vector_json as vectorJson, updated_at as updatedAt FROM item_text_embeddings WHERE embedding_space = ?`).all(embeddingSpace) as { itemId: string; embeddingSpace: string; model: string; vectorJson: string; updatedAt: string }[];
 }
 
+export function getLatestItemTextEmbeddingModel(db: PipelineDatabase, embeddingSpace = DEFAULT_EMBEDDING_SPACE): string | undefined {
+  return (
+    db.prepare(`SELECT model FROM item_text_embeddings WHERE embedding_space = ? ORDER BY updated_at DESC LIMIT 1`).get(
+      embeddingSpace
+    ) as { model: string } | undefined
+  )?.model;
+}
+
 export function saveImageEmbedding(db: PipelineDatabase, record: { imageKey: string; embeddingSpace: string; model: string; vectorJson: string; updatedAt: string }): void {
   db.prepare(`
     INSERT INTO image_embeddings (image_key, embedding_space, model, vector_json, updated_at)
@@ -203,4 +276,115 @@ export function getImageEmbedding(db: PipelineDatabase, imageKey: string, embedd
 
 export function listImageEmbeddingsBySpace(db: PipelineDatabase, embeddingSpace: string) {
   return db.prepare(`SELECT image_key as imageKey, embedding_space as embeddingSpace, model, vector_json as vectorJson, updated_at as updatedAt FROM image_embeddings WHERE embedding_space = ?`).all(embeddingSpace) as { imageKey: string; embeddingSpace: string; model: string; vectorJson: string; updatedAt: string }[];
+}
+
+export function getLatestImageEmbeddingModel(db: PipelineDatabase, embeddingSpace = DEFAULT_EMBEDDING_SPACE): string | undefined {
+  return (
+    db.prepare(`SELECT model FROM image_embeddings WHERE embedding_space = ? ORDER BY updated_at DESC LIMIT 1`).get(
+      embeddingSpace
+    ) as { model: string } | undefined
+  )?.model;
+}
+
+export function getLexicalDocument(db: PipelineDatabase, itemId: string): LexicalDocumentRecord | undefined {
+  return db.prepare(`
+    SELECT
+      item_id as itemId,
+      title,
+      description,
+      tags,
+      normalized_text as normalizedText,
+      shop_name as shopName,
+      category_name as categoryName,
+      parent_category_name as parentCategoryName,
+      price_text as priceText,
+      caption_text as captionText,
+      ocr_text as ocrText,
+      parts,
+      styles,
+      compatibility_hints as compatibilityHints,
+      keyword_digest as keywordDigest
+    FROM item_lexical_documents
+    WHERE item_id = ?
+  `).get(itemId) as LexicalDocumentRecord | undefined;
+}
+
+export function listLexicalDocuments(db: PipelineDatabase): LexicalDocumentRecord[] {
+  return db.prepare(`
+    SELECT
+      item_id as itemId,
+      title,
+      description,
+      tags,
+      normalized_text as normalizedText,
+      shop_name as shopName,
+      category_name as categoryName,
+      parent_category_name as parentCategoryName,
+      price_text as priceText,
+      caption_text as captionText,
+      ocr_text as ocrText,
+      parts,
+      styles,
+      compatibility_hints as compatibilityHints,
+      keyword_digest as keywordDigest
+    FROM item_lexical_documents
+    ORDER BY item_id ASC
+  `).all() as LexicalDocumentRecord[];
+}
+
+function upsertLexicalDocument(db: PipelineDatabase, document: LexicalDocumentRecord): void {
+  db.prepare(`DELETE FROM item_lexical_fts WHERE item_id = ?`).run(document.itemId);
+  db.prepare(`
+    INSERT INTO item_lexical_fts (
+      item_id,
+      title,
+      description,
+      tags,
+      normalized_text,
+      shop_name,
+      category_name,
+      parent_category_name,
+      price_text,
+      caption_text,
+      ocr_text,
+      parts,
+      styles,
+      compatibility_hints,
+      keyword_digest
+    ) VALUES (
+      @itemId,
+      @title,
+      @description,
+      @tags,
+      @normalizedText,
+      @shopName,
+      @categoryName,
+      @parentCategoryName,
+      @priceText,
+      @captionText,
+      @ocrText,
+      @parts,
+      @styles,
+      @compatibilityHints,
+      @keywordDigest
+    )
+  `).run(document);
+}
+
+export function refreshLexicalIndexForItem(db: PipelineDatabase, itemId: string): void {
+  db.prepare(`DELETE FROM item_lexical_fts WHERE item_id = ?`).run(itemId);
+  const document = getLexicalDocument(db, itemId);
+  if (!document) {
+    return;
+  }
+  upsertLexicalDocument(db, document);
+}
+
+export function rebuildLexicalIndex(db: PipelineDatabase): number {
+  db.prepare(`DELETE FROM item_lexical_fts`).run();
+  const documents = listLexicalDocuments(db);
+  for (const document of documents) {
+    upsertLexicalDocument(db, document);
+  }
+  return documents.length;
 }

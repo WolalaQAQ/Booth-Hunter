@@ -76,13 +76,22 @@ test("python embedding provider sends Qwen image requests through the configured
   assert.equal(result.embeddingSpace, MULTIMODAL_SHARED_SPACE);
 });
 
-test("python embedding provider batches multimodal requests and reserves reranker interface", async () => {
+test("python embedding provider batches multimodal requests and sends rerank requests through the configured runner", async () => {
   const seenPayloads: unknown[] = [];
+  const rerankCalls: { args: string[]; payload: unknown }[] = [];
   const provider = createPythonEmbeddingProvider({
     batchSize: 2,
     qwenEmbeddingModelId: "Qwen/Qwen3-VL-Embedding-2B",
-    runner: async ({ stdin }) => {
+    qwenRerankerModelId: "Qwen/Qwen3-VL-Reranker-2B",
+    runner: async ({ args, stdin }) => {
       const payload = JSON.parse(stdin);
+      if (args[1] === "qwen-rerank") {
+        rerankCalls.push({ args, payload });
+        return JSON.stringify({
+          model: "Qwen/Qwen3-VL-Reranker-2B",
+          scores: [0.97],
+        });
+      }
       seenPayloads.push(payload);
       const inputs = (payload.inputs as unknown[]) || [];
       return JSON.stringify({
@@ -102,11 +111,22 @@ test("python embedding provider batches multimodal requests and reserves reranke
   assert.equal(seenPayloads.length, 2);
   assert.deepEqual(result.vectors, [[1, 0, 0], [2, 0, 0], [1, 0, 0]]);
 
-  await assert.rejects(
-    provider.rerank({
-      query: { text: "q" },
-      documents: [{ text: "d" }],
-    }),
-    /reserved but not enabled/i
-  );
+  const rerankResult = await provider.rerank({
+    query: { text: "kikyo maid outfit" },
+    documents: [{ text: "kikyo compatible maid dress" }],
+    instruction: "Judge whether the candidate item is relevant to the BOOTH query.",
+  });
+
+  assert.equal(rerankCalls.length, 1);
+  assert.equal(rerankCalls[0]?.args[1], "qwen-rerank");
+  assert.deepEqual(rerankCalls[0]?.payload, {
+    query: { text: "kikyo maid outfit" },
+    documents: [{ text: "kikyo compatible maid dress" }],
+    instruction: "Judge whether the candidate item is relevant to the BOOTH query.",
+    modelId: "Qwen/Qwen3-VL-Reranker-2B",
+    device: "cuda",
+  });
+  assert.equal(rerankResult.model, "Qwen/Qwen3-VL-Reranker-2B");
+  assert.deepEqual(rerankResult.scores, [0.97]);
 });
+

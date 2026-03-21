@@ -15,9 +15,20 @@
     "knowledge:extract": "tsx scripts/knowledge/extract.ts",
     "knowledge:embed-text": "tsx scripts/knowledge/embed-text.ts",
     "knowledge:embed-images": "tsx scripts/knowledge/embed-images.ts",
-    "knowledge:test-retrieval": "tsx scripts/knowledge/test-retrieval.ts"
+    "knowledge:test-retrieval": "tsx scripts/knowledge/test-retrieval.ts",
+    "qdrant:start": "tsx scripts/qdrant/start.ts",
+    "retrieval:bootstrap-qdrant": "tsx scripts/retrieval/bootstrap-qdrant.ts",
+    "retrieval:index-assets": "tsx scripts/retrieval/index-assets.ts",
+    "retrieval:query-text": "tsx scripts/retrieval/query-text.ts",
+    "retrieval:query-text:rerank": "tsx scripts/retrieval/query-text.ts --rerank --rerank-top-k=5",
+    "retrieval:query-image": "tsx scripts/retrieval/query-image.ts",
+    "retrieval:query-image:rerank": "tsx scripts/retrieval/query-image.ts --rerank --rerank-top-k=5",
+    "eval:goal12:build": "tsx scripts/eval/build-goal12-benchmark.ts",
+    "eval:goal12": "tsx scripts/eval/run-goal12-eval.ts",
+    "eval:goal12:rerank": "tsx scripts/eval/run-goal12-eval.ts --rerank --rerank-top-k=5"
   },
   "dependencies": {
+    "@qdrant/js-client-rest": "^1.17.0",
     "@vercel/analytics": "^1.6.1",
     "appwrite": "^23.0.0",
     "better-sqlite3": "^12.8.0",

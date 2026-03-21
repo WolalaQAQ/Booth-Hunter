@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import BetterSqlite3 from "better-sqlite3";
 
 import {
   upsertItemImage,
@@ -110,4 +111,53 @@ test("pipeline sqlite database creates schema and round-trips records", () => {
   assert.equal(listImageEmbeddingsBySpace(db, "multimodal-shared").length, 1);
 
   db.close();
+});
+
+test("openPipelineDatabase upgrades legacy embedding tables to include embedding_space compatibility", () => {
+  const filePath = tempDbPath("legacy-embeddings.sqlite");
+  const db = openPipelineDatabase(filePath);
+  db.close();
+
+  const legacy = new BetterSqlite3(filePath);
+  try {
+    legacy.exec(`
+      DROP TABLE item_text_embeddings;
+      DROP TABLE image_embeddings;
+      CREATE TABLE item_text_embeddings (
+        item_id TEXT PRIMARY KEY,
+        model TEXT NOT NULL,
+        vector_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE image_embeddings (
+        image_key TEXT PRIMARY KEY,
+        model TEXT NOT NULL,
+        vector_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO item_text_embeddings (item_id, model, vector_json, updated_at)
+      VALUES ('legacy-item', 'local-hash-v1', '[1,0,0]', '2026-03-19T00:00:00.000Z');
+      INSERT INTO image_embeddings (image_key, model, vector_json, updated_at)
+      VALUES ('legacy-item:0', 'local-pixel-v1', '[0,1,0]', '2026-03-19T00:00:01.000Z');
+    `);
+  } finally {
+    legacy.close();
+  }
+
+  const migrated = openPipelineDatabase(filePath);
+  try {
+    assert.equal(getItemTextEmbedding(migrated, "legacy-item", "multimodal-shared")?.model, "local-hash-v1");
+    assert.equal(getImageEmbedding(migrated, "legacy-item:0", "multimodal-shared")?.model, "local-pixel-v1");
+
+    saveItemTextEmbedding(migrated, {
+      itemId: "legacy-item",
+      embeddingSpace: "multimodal-shared",
+      model: "updated-model",
+      vectorJson: JSON.stringify([0, 1, 0]),
+      updatedAt: "2026-03-19T00:00:02.000Z",
+    });
+    assert.equal(getItemTextEmbedding(migrated, "legacy-item", "multimodal-shared")?.model, "updated-model");
+  } finally {
+    migrated.close();
+  }
 });
