@@ -37,9 +37,9 @@ test("rankImageMatchesByItem keeps the best image score for each item", () => {
   const results = rankImageMatchesByItem(
     [1, 0, 0],
     [
-      { imageKey: "1:0", vector: [0.8, 0.2, 0] },
-      { imageKey: "1:1", vector: [1, 0, 0] },
-      { imageKey: "2:0", vector: [0, 1, 0] },
+      { itemId: "1", vector: [0.8, 0.2, 0] },
+      { itemId: "1", vector: [1, 0, 0] },
+      { itemId: "2", vector: [0, 1, 0] },
     ],
     2
   );

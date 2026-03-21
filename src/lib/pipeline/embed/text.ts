@@ -1,3 +1,5 @@
+import { cosineSimilarity } from "../../search/scoring";
+
 const DEFAULT_DIMENSION = 256;
 
 function tokenize(text: string): string[] {
@@ -30,11 +32,4 @@ export function embedTextLocal(text: string, dimension = DEFAULT_DIMENSION): num
   return vector.map((value) => value / norm);
 }
 
-export function cosineSimilarity(left: number[], right: number[]): number {
-  const size = Math.min(left.length, right.length);
-  let sum = 0;
-  for (let index = 0; index < size; index += 1) {
-    sum += (left[index] || 0) * (right[index] || 0);
-  }
-  return sum;
-}
+export { cosineSimilarity };

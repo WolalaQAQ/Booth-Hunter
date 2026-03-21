@@ -55,7 +55,7 @@ async function main() {
     const imageMatches = rankImageMatchesByItem(
       queryVector,
       listImageEmbeddingsBySpace(db, MULTIMODAL_SHARED_SPACE).map((record) => ({
-        imageKey: record.imageKey,
+        itemId: record.imageKey.split(":")[0] || record.imageKey,
         vector: JSON.parse(record.vectorJson),
       })),
       10
