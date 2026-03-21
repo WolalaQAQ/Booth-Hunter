@@ -102,6 +102,17 @@ APPWRITE_CATALOG_COLLECTION_ID=booth_hunter_catalog
 
 > 注意：`APPWRITE_API_KEY` 只给本地 bootstrap / publish 脚本用，不要暴露到前端。
 
+### Qdrant retrieval substrate（Phase 2）
+
+```env
+QDRANT_URL=http://localhost:6333
+QDRANT_API_KEY=optional_api_key
+QDRANT_COLLECTION_ASSETS=booth_assets
+QDRANT_COLLECTION_ITEMS=booth_items
+```
+
+> 注意：`QDRANT_API_KEY` 是可选的；如果你的 Qdrant 实例没有启用鉴权，可以不设置。
+
 ---
 
 ## 安装
