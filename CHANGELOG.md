@@ -1,3 +1,31 @@
+## [0.2.2] - 2026-03-21
+### Features
+- Reprioritized the roadmap so Booth-Hunter now first hardens the **Goals 1/2/3 pipelines and performance** before treating **Goal 4 finished-model reverse search** as an active implementation target.
+- Updated `AGENTS.md` and `README.md` to move Goal 4 later in the execution order while keeping it as a long-term capability.
+
+### Design Rationale
+- The user wants the first three goals to become strong and stable before spending more engineering effort on finished-model reverse search.
+- Goals 1/2/3 provide the shared retrieval, ranking, and refinement substrate that Goal 4 will later reuse.
+
+### Notes & Caveats
+- Goal 4 is deferred, not removed.
+- Qdrant-centered retrieval remains the approved architecture direction; only the execution priority changed.
+
+## [0.2.1] - 2026-03-21
+### Features
+- Reframed Booth-Hunter in the project docs as a **reverse-search-first multimodal retrieval system** instead of a generic Booth chat/RAG app.
+- Updated `AGENTS.md` and `README.md` to distinguish the **currently implemented Phase 1 foundation** from the **approved next-step retrieval architecture**.
+- Recorded a **Qdrant-centered retrieval substrate** direction with lexical recall, grouped candidate ranking, and benchmark-driven evaluation as the approved next architecture step.
+
+### Design Rationale
+- The flagship task is candidate reduction from finished VRChat model images, so the architecture should optimize for retrieval quality and human-reviewable candidate sets rather than generic document-chat abstractions.
+- The current local retrieval code is a valid validation prototype, but not the right long-term retrieval core.
+- Dense multimodal recall, exact-term recall, grouping, and evaluation need to become explicit first-class systems before conversational narrowing work.
+
+### Notes & Caveats
+- This release records an architectural direction change in canonical project docs; the full Qdrant-centered retrieval stack is **planned**, not yet fully implemented in the current branch.
+- The completed 2026-03-19 local-first foundation remains valid and is now treated as the base layer for the new retrieval architecture.
+
 ## [0.2.0] - 2026-03-19
 ### Features
 - Replaced the local hash/pixel embedding baseline with a unified `Qwen/Qwen3-VL-Embedding-2B` shared multimodal embedding pipeline.

@@ -8,7 +8,7 @@
 - `src/lib/pipeline/*` contains the local knowledge-base pipeline: SQLite storage, BOOTH adapters, transient image download/compression, normalization, enrichment, embeddings, and retrieval helpers.
 - `scripts/sync/*` and `scripts/knowledge/*` are the primary Phase 1 execution surface. Prefer these local scripts over adding cloud workers.
 - `data/` is local pipeline output (SQLite DBs and smoke-test artifacts) and should stay ignored.
-- `docs/superpowers/*` holds the approved Phase 1 local-first spec/plan.
+- `docs/superpowers/*` holds historical superpowers workflow artifacts from the Phase 1 local-first work. Do not treat that folder as the canonical place for durable architecture updates unless the user explicitly asks for superpowers workflow docs; update root project docs such as `AGENTS.md`, `README.md`, and `CHANGELOG.md` instead.
 
 ## Build, Test, and Development Commands
 - `npm install` — install dependencies.
@@ -58,20 +58,43 @@ The final product goal is to complete all four capabilities below:
 4. Reverse search from a finished model image to a **human-reviewable candidate set** of BOOTH assets that may have been used in the mod.
 
 ### Priority Order
-Long-term, all four goals matter. For architecture and implementation sequencing, prioritize them in this order:
-1. Goal 4: reverse search from finished model image to candidate assets.
-2. Goal 2: image-to-item similarity search.
-3. Goal 1: natural-language semantic search.
-4. Goal 3: multi-turn conversational narrowing over candidate pools.
+Long-term, all four goals matter. For **current implementation sequencing as of 2026-03-21**, prioritize them in this order:
+1. Goal 1: natural-language semantic search.
+2. Goal 2: image-based similarity search.
+3. Goal 3: multi-turn conversational narrowing over candidate pools.
+4. Goal 4: reverse search from a finished model image to candidate assets.
 
-Reason: goals 1/2/3 are foundational subsystems for goal 4, which is the hardest and highest-value capability.
+Reason: the user wants to **first make the pipelines for Goals 1/2/3 run well and hit strong performance**, then iterate Goal 4 later on top of that foundation.
 
 ### Core Product Assumption
 For reverse search, exact identification is often impossible because creators may heavily modify, combine, recolor, or obscure original BOOTH assets.
 The system is still considered successful if it can shrink the search space to a **high-quality candidate range that a human can review**.
 
-### Core Technical Strategy: Reverse-Search-First
-Future implementation should follow a **reverse-search-first** architecture with three layers:
+### Product Success Definition (2026-03-21)
+
+- Treat Booth-Hunter primarily as a **candidate-reduction system**, not an exact source-identification system.
+- The main product KPI is whether the system returns a **high-quality, human-reviewable candidate set**.
+- Treat strict exact-source retrieval metrics as research metrics that matter, but do not let them replace the primary product goal.
+- For the **current execution phase**, first optimize the pipeline and performance of Goals 1/2/3; Goal 4 remains important, but it is intentionally deferred until the first three capabilities are strong.
+
+### Approved Retrieval Architecture Update (2026-03-21)
+
+- Treat Booth-Hunter as a **multimodal candidate retrieval system**, not a generic document RAG app.
+- The preferred long-term architecture is:
+  - custom asset construction pipeline
+  - **Qdrant-centered retrieval substrate**
+  - lexical exact-term retrieval over the canonical text corpus
+  - custom candidate aggregation and explanation
+- In the current roadmap window, that retrieval architecture should first serve:
+  - Goal 1 text retrieval
+  - Goal 2 image retrieval
+  - Goal 3 candidate-pool narrowing
+  - and only later Goal 4 finished-model reverse search
+- Generic RAG frameworks such as LangChain, LlamaIndex, or Haystack may be used later as helper tooling for orchestration, evaluation support, or observability, but they should **not** define the core retrieval data model or system backbone.
+- The current SQLite `vector_json` + application-level cosine/hardcoded fusion path is a **prototype validation layer**, not the desired final retrieval engine.
+
+### Core Technical Strategy: Multimodal-Retrieval-First (2026-03-21 active execution priority)
+Future implementation should first harden the shared multimodal retrieval and refinement stack for Goals 1/2/3, then apply that stack to Goal 4 later.
 
 #### 1. Asset Knowledge Base Layer
 Every BOOTH item should become a rich searchable object, not just a title/tag record.
@@ -98,6 +121,12 @@ Retrieval should use hybrid methods instead of relying on a single score source:
 - metadata filtering for price, avatar compatibility, category, NSFW flags, etc.
 - reranking after recall
 
+Approved substrate direction:
+- use a dedicated retrieval engine rather than keeping long-term search inside SQLite application code
+- prefer **Qdrant** for dense retrieval serving
+- keep lexical retrieval available for exact-term-heavy BOOTH metadata
+- group and score candidates at the `item_id` level so one BOOTH item can accumulate evidence from text, images, and future part/crop representations
+
 #### 3. Conversational Candidate-Narrowing Layer
 Multi-turn chat should not only rewrite keywords. It should maintain structured search state and refine existing candidate pools.
 Examples of state fields:
@@ -113,8 +142,8 @@ Each turn should prefer:
 - filter/rerank current candidate sets
 - trigger supplemental retrieval only when needed
 
-### Goal 4 Special Strategy: Reverse Search from Finished Model Images
-This is the flagship capability and should drive the overall system design.
+### Deferred Goal 4 Strategy: Reverse Search from Finished Model Images
+Goal 4 remains strategically important, but it is **not** the current execution priority. It should be built later on top of strong Goals 1/2/3 retrieval and narrowing quality.
 
 Recommended pipeline:
 1. **Finished-image understanding**
@@ -133,7 +162,7 @@ Recommended pipeline:
 The product should prefer **candidate reduction + explanation** over false certainty.
 
 ### Phase Roadmap
-Implementation should proceed in four phases. The end goal is to complete all of them.
+Implementation should proceed in five phases. The end goal is to complete all of them.
 
 #### Phase 1 — Build the reverse-search foundation
 Primary objective:
@@ -153,9 +182,37 @@ Expected outcome:
 - initial support for image similarity search (goal 2)
 - required foundation for reverse search (goal 4)
 
-#### Phase 2 — Deliver reverse-search MVP
+#### Phase 2 — Upgrade the retrieval substrate for Goals 1 and 2
 Primary objective:
-- Make goal 4 usable end-to-end, even if precision is still limited.
+- Replace the prototype retrieval core with a real retrieval-serving substrate and durable evaluation loop for text and image search.
+
+Scope:
+- introduce **Qdrant** as the dedicated retrieval index
+- add lexical retrieval for exact BOOTH vocabulary, avatar names, and product terms
+- group retrieval evidence at the `item_id` level
+- add benchmark/evaluation assets and repeatable retrieval metrics
+
+Expected outcome:
+- the project stops relying on SQLite + handwritten score fusion as the long-term retrieval core
+- dense recall, exact-term recall, grouping, and evaluation become explicit first-class systems
+
+#### Phase 3 — Deliver real conversational narrowing for Goal 3
+Primary objective:
+- Turn text/image search into an iterative candidate-pool refinement workflow.
+
+Scope:
+- maintain structured conversation/search state
+- support narrowing by part, avatar, style, color, budget, and exclusions
+- rerank/filter existing candidate pools across turns
+- retrieve extra candidates only when necessary
+
+Expected outcome:
+- Goals 1/2 become substantially more useful through stable refinement behavior
+- Goal 3 becomes genuinely useful and stable
+
+#### Phase 4 — Deliver Goal 4 reverse-search MVP
+Primary objective:
+- Make finished-model reverse search usable end-to-end on top of the mature shared retrieval stack.
 
 Scope:
 - upload finished model images
@@ -167,21 +224,7 @@ Scope:
 Expected outcome:
 - users can upload a finished model image and get a narrowed candidate range of likely BOOTH materials
 
-#### Phase 3 — Upgrade to real conversational narrowing
-Primary objective:
-- Turn search into an iterative narrowing workflow instead of repeated fresh searches.
-
-Scope:
-- maintain structured conversation/search state
-- allow narrowing by part, avatar, style, color, budget, exclusion constraints, etc.
-- rerank/filter existing candidate pools across turns
-- retrieve extra candidates only when necessary
-
-Expected outcome:
-- goal 3 becomes genuinely useful and stable
-- goals 1/2/4 all benefit from better interactive refinement
-
-#### Phase 4 — Improve precision and ranking quality
+#### Phase 5 — Improve Goal 4 precision and ranking quality
 Primary objective:
 - Push the quality ceiling of reverse search and multimodal matching.
 
@@ -198,13 +241,15 @@ Expected outcome:
 - improved trustworthiness for difficult modded examples
 
 ### Implementation Principles for Future Tasks
-- Prefer incremental progress toward the four-phase roadmap over unrelated feature work.
+- Prefer incremental progress toward the five-phase roadmap over unrelated feature work.
 - When choosing between short-term convenience and reverse-search foundation, prefer the foundation unless the user explicitly asks otherwise.
 - Do not treat the LLM as the retrieval database. Use models for understanding, decomposition, explanation, and reranking; use indexes/vector search/metadata search for retrieval.
 - Design all new search-related data structures so they can support text queries, image queries, and part-level queries.
 - When implementing Phase 2+ features, always preserve the possibility that one finished model image may correspond to multiple combined BOOTH assets.
 - Favor outputs that help human review: grouped candidates, confidence hints, and similarity explanations.
 - Avoid overstating certainty in UI or API responses. Use wording like "possible materials", "likely candidates", or "may match" when appropriate.
+- Optimize first for **task-fit and end-state retrieval quality**; do not let migration convenience or low-risk fallback thinking dominate architecture recommendations when the user is asking for the best-fit target design.
+- When priorities conflict, honor the current user-approved sequencing: **Goals 1/2/3 pipeline and performance first, Goal 4 later**.
 
 ## Operational Scope Preference (2026-03-19)
 
@@ -288,7 +333,7 @@ Phase 1 is intentionally split into three local-first subphases:
   - `Qwen3-VL-Embedding-2B` for shared text/image embeddings
   - Python-backed provider abstraction via `scripts/ml/embed_models.py`
   - a reserved reranker interface for future `Qwen3-VL-Reranker-*` integration
-  - local retrieval validation scripts before any cloud rollout
+  - local retrieval validation scripts as a prototype validation layer before a dedicated retrieval substrate rollout
 
 ### Embedding environment rules
 
@@ -302,3 +347,4 @@ Phase 1 is intentionally split into three local-first subphases:
 - During Phase 1, prioritize **database construction and validation scripts** over polished user interaction.
 - Favor verification that proves the local DB, transient image-processing path, and retrieval outputs are internally consistent.
 - Local smoke scripts are part of the required verification surface, not optional extras.
+- Do not mistake Phase 1 smoke retrieval scripts for the final long-term retrieval architecture.

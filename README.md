@@ -2,6 +2,17 @@
 
 Booth Hunter 正在从单纯的 Booth 聊天搜索助手，演进为一个 **面向 VRChat 改模素材的多模态逆向检索工具**。
 
+> **当前推荐架构（2026-03-21）**
+>
+> Booth-Hunter 应被视为一个 **multimodal candidate retrieval system**，而不是一个通用文档 RAG 应用。
+>
+> - **长期产品目标**：覆盖文本搜索、图搜相似、对话式 narrowing、成品改模图反推
+> - **当前活跃实施优先级**：先把 **Goals 1/2/3** 的 pipeline 和性能打牢，再逐步迭代 **Goal 4**
+> - **当前已实现基础**：Appwrite + 本地 SQLite + 本地知识提取 + Qwen embeddings
+> - **当前目标架构**：在现有基础上升级为 **Qdrant-centered retrieval substrate + lexical retrieval + candidate aggregation/explanation**
+>
+> 当前项目级权威路线图与架构说明以 `AGENTS.md` 为准。
+
 当前已完成的新 **Phase 1（local-first）** 基础包括：
 
 - **Appwrite**：用户登录、聊天记录、用户设置、compact catalog 发布位
@@ -15,6 +26,8 @@ Booth Hunter 正在从单纯的 Booth 聊天搜索助手，演进为一个 **面
 
 ## 当前架构
 
+> 下文先描述 **当前已实现的系统**，然后描述 **当前批准的目标架构**。两者不要混淆。
+
 ### 云端
 - Appwrite Auth
 - Appwrite Database
@@ -25,6 +38,41 @@ Booth Hunter 正在从单纯的 Booth 聊天搜索助手，演进为一个 **面
 - `data/raw/*.sqlite`：raw crawl 数据、normalized items、caption/OCR/structured data、embeddings
 - `scripts/sync/*`：手动同步 BOOTH 3D Models
 - `scripts/knowledge/*`：本地知识提取与检索验证
+
+## 当前已实现 vs 当前目标
+
+### 当前已实现
+
+- Appwrite：auth / chats / settings / compact catalog projection
+- SQLite：canonical local build store
+- Qwen3-VL-Embedding-2B：shared multimodal embeddings
+- 本地 retrieval smoke test：用于验证数据管线与 embedding 是否跑通
+
+### 当前目标（未完全实现）
+
+- **Qdrant**：dense multimodal retrieval substrate
+- **lexical retrieval**：补强 avatar 名称、商品术语、style 词汇等 exact-term recall
+- **candidate grouping**：按 `item_id` 聚合文本、图片、未来 crop/part 证据
+- **retrieval explanations**：输出可人工审查的召回理由
+- **benchmark/evaluation**：持续评估 exact-source Recall@K 与 candidate usefulness@K
+- **goal sequencing**：先服务文本搜索、图搜相似、candidate narrowing，Goal 4 后置
+
+## 为什么不是“通用 RAG 框架主架构”
+
+这个项目的旗舰任务不是“对文档做问答”，而是：
+
+- 从文本、商品图、成品改模图里检索候选素材
+- 合并同一个 BOOTH item 的多种证据
+- 未来支持 part/crop 级别的召回
+- 输出按 item 组织的候选集与解释
+
+因此当前推荐做法是：
+
+- **自研资产构建管线**
+- **Qdrant-centered retrieval**
+- **自定义 candidate aggregation / explanation**
+
+而不是把 LangChain / LlamaIndex / Haystack 当系统骨架。
 
 ---
 
@@ -205,7 +253,64 @@ npm run knowledge:test-retrieval -- --db=data/raw/booth-pipeline.sqlite --text="
 npm run knowledge:test-retrieval -- --db=data/raw/booth-pipeline.sqlite --text="VRChat pose tool" --image="C:\path\to\image.webp"
 ```
 
+> 注意：这里的 `knowledge:test-retrieval` 仍然是 **Phase 1 验证脚本**。它证明本地 embedding 和基本召回逻辑可运行，但它 **不是** 当前推荐的最终检索架构。
+
 ---
+
+## 当前批准的目标架构
+
+### 系统分层
+
+1. **Asset construction layer**
+   - crawl / normalize / OCR / caption / structured extraction
+   - 把每个 BOOTH item 变成 rich asset object
+2. **Retrieval substrate**
+   - Qdrant dense retrieval
+   - lexical exact-term retrieval
+3. **Query understanding / decomposition**
+   - whole-image understanding
+   - subqueries / future local crops
+4. **Candidate aggregation**
+   - 按 `item_id` 聚合
+   - 输出 explanation
+5. **Evaluation**
+   - benchmark
+   - Recall@K
+   - candidate usefulness@K
+
+### 核心数据边界
+
+- **Appwrite**：只存用户侧 hosted data
+- **SQLite**：canonical raw/enrichment/build-state store
+- **Qdrant**：retrieval-serving index
+
+### 项目成功标准
+
+当前执行阶段的主要目标不是“先做成品模反推”，而是先把前三个目标的 pipeline 和性能打稳。
+
+当前阶段重点是：
+
+- Goal 1：文本语义搜索
+- Goal 2：图片相似检索
+- Goal 3：对话式 narrowing / candidate pool refinement
+
+Goal 4 仍然存在，但被延后到这些基础能力稳定之后。
+
+长期来看，项目的逆向检索目标仍然是：
+
+> **把几万件候选素材缩小到一批高质量、可人工审查的候选集合。**
+
+当前推荐重点指标：
+
+- **Goals 1/2**：retrieval relevance / candidate quality
+- **Goal 3**：narrowing 后的候选池质量和稳定性
+- **Goal 4**：strict exact-source item Recall@50（后续阶段研究指标）
+- **Goal 4**：candidate usefulness@50（后续阶段产品指标）
+
+在“不训练专用模型、仅使用现成 foundation model + 检索系统”的前提下，当前设计预期：
+
+- 先优先保证 Goals 1/2/3 的性能和可用性
+- Goal 4 的 Recall@50 / candidate usefulness 指标在后续阶段逐步优化
 
 ## 测试与验证
 
@@ -266,7 +371,7 @@ npm run knowledge:test-retrieval -- --db=data/raw/smoke.sqlite --text="VRChat po
 - text / image 已统一升级为 `Qwen3-VL-Embedding-2B`
 - reranker 目前只预留接口，暂未启用
 - 图片默认不做本地持久化备份，而是按需下载处理
-- retrieval 先做 local validation，不急着上云
+- retrieval 先做 local validation，不急着把原型误当成最终检索内核
 
 这套实现偏向 **“先跑通地基，再逐步提升质量”**，而不是一上来做成复杂的产品级架构。
 
@@ -283,3 +388,31 @@ npm run knowledge:test-retrieval -- --db=data/raw/smoke.sqlite --text="VRChat po
   - item image embeddings
   都放进 `Qwen3-VL-Embedding-2B` 的 shared space，再做本地混合排序。
 - reranker 目前只预留接口，后续再接 `Qwen3-VL-Reranker-2B/8B`。
+
+## 新路线图（2026-03-21）
+
+### Phase 1 — Foundation（已完成）
+- local-first sync / enrich / embed 基础
+- Appwrite 用户数据边界
+- SQLite canonical store
+
+### Phase 2 — Retrieval Substrate Upgrade（Goals 1/2）
+- Qdrant indexing
+- lexical retrieval
+- grouped candidate ranking
+- benchmark / evaluation
+
+### Phase 3 — Conversational Narrowing（Goal 3）
+- structured search state
+- iterative refinement over candidate pools
+
+### Phase 4 — Reverse Search MVP（Goal 4）
+- whole-image understanding
+- subquery decomposition
+- grouped candidate output
+- explanation
+
+### Phase 5 — Goal 4 Precision Upgrades
+- reranker
+- better fusion
+- future crop / part quality upgrades
