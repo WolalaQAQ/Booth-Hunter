@@ -15,6 +15,7 @@ import {
 } from "../../../pipeline/sqlite/db";
 import { projectAssetPoints, projectItemPoint } from "./projectors";
 import { MULTIMODAL_SHARED_SPACE } from "../../../pipeline/embed/provider";
+import { buildAssetPointId, buildItemPointId } from "./schema";
 
 function tempDbPath(name: string) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "booth-hunter-qdrant-projectors-"));
@@ -125,7 +126,7 @@ test("qdrant projectors emit deterministic item and asset payloads from canonica
   const itemPoint = projectItemPoint(db, "item-1001", MULTIMODAL_SHARED_SPACE);
   const assetPoints = projectAssetPoints(db, "item-1001", MULTIMODAL_SHARED_SPACE);
 
-  assert.equal(itemPoint?.id, "item:item-1001");
+  assert.equal(itemPoint?.id, buildItemPointId("item-1001"));
   assert.deepEqual(itemPoint?.vector.item_text, [0.1, 0.2, 0.3]);
   assert.deepEqual(itemPoint?.payload, {
     entityType: "item",
@@ -152,8 +153,8 @@ test("qdrant projectors emit deterministic item and asset payloads from canonica
   });
 
   assert.equal(assetPoints.length, 2);
-  assert.equal(assetPoints[0]?.id, "asset:item-1001:0");
-  assert.equal(assetPoints[1]?.id, "asset:item-1001:1");
+  assert.equal(assetPoints[0]?.id, buildAssetPointId("item-1001:0"));
+  assert.equal(assetPoints[1]?.id, buildAssetPointId("item-1001:1"));
   assert.deepEqual(assetPoints[0]?.vector.asset_image, [0.9, 0.1]);
   assert.deepEqual(assetPoints[1]?.vector.asset_image, [0.8, 0.2]);
   assert.deepEqual(assetPoints[0]?.payload, {

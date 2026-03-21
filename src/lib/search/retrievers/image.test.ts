@@ -67,3 +67,41 @@ test("image retriever skips lexical lookup when no hint text is provided", async
 
   assert.equal(lexicalCalls, 0);
 });
+
+test("image retriever uses grouped candidate ranking by default", async () => {
+  const retriever = createImageRetriever({
+    embedQuery: async () => [0.4, 0.5],
+    denseSearch: async () => [
+      { itemId: "item-1", assetId: "item-1:image:0", score: 0.92, source: "dense_image" },
+      { itemId: "item-1", assetId: "item-1:image:1", score: 0.85, source: "dense_image" },
+      { itemId: "item-2", assetId: "item-2:image:0", score: 0.9, source: "dense_image" },
+    ],
+  });
+
+  const result = await retriever.search({ imagePath: "C:/tmp/query.png" });
+
+  assert.equal(result.candidates[0]?.itemId, "item-1");
+  assert.match(result.candidates[0]?.explanation || "", /visual/i);
+});
+
+test("image retriever allows default grouped ranking weights to be configured", async () => {
+  const retriever = createImageRetriever({
+    embedQuery: async () => [0.4, 0.5],
+    denseSearch: async () => [
+      { itemId: "item-1", assetId: "item-1:image:0", score: 0.7, source: "dense_image" },
+      { itemId: "item-2", assetId: "item-2:image:0", score: 0.8, source: "dense_image" },
+    ],
+    lexicalSearch: async () => [
+      { itemId: "item-1", assetId: "item-1:lexical", score: 0.9, source: "lexical" },
+    ],
+    fusionWeights: {
+      dense_text: 1,
+      dense_image: 1,
+      lexical: 0.1,
+    },
+  });
+
+  const result = await retriever.search({ imagePath: "C:/tmp/query.png", text: "kikyo" });
+
+  assert.equal(result.candidates[0]?.itemId, "item-2");
+});

@@ -66,3 +66,43 @@ test("text retriever propagates filters and uses the default limit", async () =>
   assert.equal(observed.filterValue, "Selestia");
   assert.equal(observed.limit, 10);
 });
+
+test("text retriever uses grouped candidate ranking by default", async () => {
+  const retriever = createTextRetriever({
+    embedQuery: async () => [1],
+    denseSearch: async () => [
+      { itemId: "item-1", assetId: "item-1:text", score: 0.65, source: "dense_text" },
+      { itemId: "item-2", assetId: "item-2:text", score: 0.8, source: "dense_text" },
+    ],
+    lexicalSearch: async () => [
+      { itemId: "item-1", assetId: "item-1:lexical", score: 0.5, source: "lexical", matchedFields: ["styles"] },
+    ],
+  });
+
+  const result = await retriever.search({ text: "maid boots" });
+
+  assert.equal(result.candidates[0]?.itemId, "item-1");
+  assert.match(result.candidates[0]?.explanation || "", /exact-term/i);
+});
+
+test("text retriever allows default grouped ranking weights to be configured", async () => {
+  const retriever = createTextRetriever({
+    embedQuery: async () => [1],
+    denseSearch: async () => [
+      { itemId: "item-1", assetId: "item-1:text", score: 0.6, source: "dense_text" },
+      { itemId: "item-2", assetId: "item-2:text", score: 0.9, source: "dense_text" },
+    ],
+    lexicalSearch: async () => [
+      { itemId: "item-1", assetId: "item-1:lexical", score: 0.5, source: "lexical" },
+    ],
+    fusionWeights: {
+      dense_text: 1,
+      dense_image: 1,
+      lexical: 0.1,
+    },
+  });
+
+  const result = await retriever.search({ text: "maid boots" });
+
+  assert.equal(result.candidates[0]?.itemId, "item-2");
+});

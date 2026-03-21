@@ -67,8 +67,33 @@ export type LexicalDocumentRecord = {
   keywordDigest: string;
 };
 
+const DEFAULT_EMBEDDING_SPACE = 'multimodal-shared';
+
 function ensureParentDirectory(filePath: string) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
+}
+
+function hasColumn(db: PipelineDatabase, tableName: string, columnName: string): boolean {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+  return columns.some((column) => column.name === columnName);
+}
+
+function ensureEmbeddingTableCompatibility(
+  db: PipelineDatabase,
+  tableName: 'item_text_embeddings' | 'image_embeddings',
+  idColumn: 'item_id' | 'image_key'
+) {
+  if (!hasColumn(db, tableName, 'embedding_space')) {
+    db.exec(`
+      ALTER TABLE ${tableName}
+      ADD COLUMN embedding_space TEXT NOT NULL DEFAULT '${DEFAULT_EMBEDDING_SPACE}'
+    `);
+  }
+
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS ${tableName}_${idColumn}_embedding_space_idx
+    ON ${tableName} (${idColumn}, embedding_space)
+  `);
 }
 
 export function openPipelineDatabase(filePath: string): PipelineDatabase {
@@ -76,6 +101,8 @@ export function openPipelineDatabase(filePath: string): PipelineDatabase {
   const db = new BetterSqlite3(filePath);
   db.pragma('journal_mode = WAL');
   db.exec(PIPELINE_SCHEMA);
+  ensureEmbeddingTableCompatibility(db, 'item_text_embeddings', 'item_id');
+  ensureEmbeddingTableCompatibility(db, 'image_embeddings', 'image_key');
   const normalizedItemCount = Number(
     (db.prepare(`SELECT COUNT(*) as count FROM normalized_items`).get() as { count: number }).count || 0
   );
@@ -154,6 +181,10 @@ export function listAllNormalizedItems(db: PipelineDatabase): NormalizedItemReco
   return db.prepare(`SELECT item_id as itemId, normalized_json as normalizedJson, content_hash as contentHash, updated_at as updatedAt FROM normalized_items ORDER BY item_id ASC`).all() as NormalizedItemRecord[];
 }
 
+export function listNormalizedItemIds(db: PipelineDatabase): string[] {
+  return db.prepare(`SELECT item_id as itemId FROM normalized_items ORDER BY item_id ASC`).all().map((row) => String((row as { itemId: string }).itemId));
+}
+
 export function saveImageAnalysis(db: PipelineDatabase, record: ImageAnalysisRecord): void {
   db.prepare(`
     INSERT INTO image_analysis (image_key, item_id, image_index, caption_text, ocr_text, updated_at)
@@ -216,6 +247,14 @@ export function listItemTextEmbeddingsBySpace(db: PipelineDatabase, embeddingSpa
   return db.prepare(`SELECT item_id as itemId, embedding_space as embeddingSpace, model, vector_json as vectorJson, updated_at as updatedAt FROM item_text_embeddings WHERE embedding_space = ?`).all(embeddingSpace) as { itemId: string; embeddingSpace: string; model: string; vectorJson: string; updatedAt: string }[];
 }
 
+export function getLatestItemTextEmbeddingModel(db: PipelineDatabase, embeddingSpace = DEFAULT_EMBEDDING_SPACE): string | undefined {
+  return (
+    db.prepare(`SELECT model FROM item_text_embeddings WHERE embedding_space = ? ORDER BY updated_at DESC LIMIT 1`).get(
+      embeddingSpace
+    ) as { model: string } | undefined
+  )?.model;
+}
+
 export function saveImageEmbedding(db: PipelineDatabase, record: { imageKey: string; embeddingSpace: string; model: string; vectorJson: string; updatedAt: string }): void {
   db.prepare(`
     INSERT INTO image_embeddings (image_key, embedding_space, model, vector_json, updated_at)
@@ -237,6 +276,14 @@ export function getImageEmbedding(db: PipelineDatabase, imageKey: string, embedd
 
 export function listImageEmbeddingsBySpace(db: PipelineDatabase, embeddingSpace: string) {
   return db.prepare(`SELECT image_key as imageKey, embedding_space as embeddingSpace, model, vector_json as vectorJson, updated_at as updatedAt FROM image_embeddings WHERE embedding_space = ?`).all(embeddingSpace) as { imageKey: string; embeddingSpace: string; model: string; vectorJson: string; updatedAt: string }[];
+}
+
+export function getLatestImageEmbeddingModel(db: PipelineDatabase, embeddingSpace = DEFAULT_EMBEDDING_SPACE): string | undefined {
+  return (
+    db.prepare(`SELECT model FROM image_embeddings WHERE embedding_space = ? ORDER BY updated_at DESC LIMIT 1`).get(
+      embeddingSpace
+    ) as { model: string } | undefined
+  )?.model;
 }
 
 export function getLexicalDocument(db: PipelineDatabase, itemId: string): LexicalDocumentRecord | undefined {

@@ -1,10 +1,13 @@
+import { groupSearchCandidates } from "../grouping";
+import { FusionWeights } from "../fusion";
 import { ImageSearchInput, ImageSearchQuery, SearchCandidate, SearchEvidence, SearchResult } from "../types";
 
 export type ImageRetrieverDependencies = {
   embedQuery: (query: ImageSearchQuery) => Promise<number[]>;
   denseSearch: (vector: number[], query: ImageSearchQuery) => Promise<SearchEvidence[]>;
   lexicalSearch?: (text: string, query: ImageSearchQuery) => Promise<SearchEvidence[]>;
-  groupCandidates: (evidence: SearchEvidence[], limit: number, query: ImageSearchQuery) => SearchCandidate[];
+  groupCandidates?: (evidence: SearchEvidence[], limit: number, query: ImageSearchQuery) => SearchCandidate[];
+  fusionWeights?: FusionWeights;
 };
 
 export function createImageRetriever(dependencies: ImageRetrieverDependencies) {
@@ -20,7 +23,12 @@ export function createImageRetriever(dependencies: ImageRetrieverDependencies) {
       const lexicalEvidence =
         dependencies.lexicalSearch && query.text ? await dependencies.lexicalSearch(query.text, query) : [];
       const mergedEvidence = [...evidence, ...lexicalEvidence];
-      const candidates = dependencies.groupCandidates(mergedEvidence, query.limit ?? 10, query);
+      const candidates = (dependencies.groupCandidates ||
+        ((records, limit) => groupSearchCandidates(records, { limit, weights: dependencies.fusionWeights })))(
+        mergedEvidence,
+        query.limit ?? 10,
+        query
+      );
 
       return {
         query,
