@@ -49,6 +49,24 @@ export type StructuredItemRecord = {
   updatedAt: string;
 };
 
+export type LexicalDocumentRecord = {
+  itemId: string;
+  title: string;
+  description: string;
+  tags: string;
+  normalizedText: string;
+  shopName: string;
+  categoryName: string;
+  parentCategoryName: string;
+  priceText: string;
+  captionText: string;
+  ocrText: string;
+  parts: string;
+  styles: string;
+  compatibilityHints: string;
+  keywordDigest: string;
+};
+
 function ensureParentDirectory(filePath: string) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
 }
@@ -58,6 +76,15 @@ export function openPipelineDatabase(filePath: string): PipelineDatabase {
   const db = new BetterSqlite3(filePath);
   db.pragma('journal_mode = WAL');
   db.exec(PIPELINE_SCHEMA);
+  const normalizedItemCount = Number(
+    (db.prepare(`SELECT COUNT(*) as count FROM normalized_items`).get() as { count: number }).count || 0
+  );
+  const lexicalDocumentCount = Number(
+    (db.prepare(`SELECT COUNT(*) as count FROM item_lexical_fts`).get() as { count: number }).count || 0
+  );
+  if (normalizedItemCount > 0 && lexicalDocumentCount < normalizedItemCount) {
+    rebuildLexicalIndex(db);
+  }
   return db;
 }
 
@@ -112,6 +139,7 @@ export function upsertNormalizedItem(db: PipelineDatabase, record: NormalizedIte
       content_hash = excluded.content_hash,
       updated_at = excluded.updated_at
   `).run(record);
+  refreshLexicalIndexForItem(db, record.itemId);
 }
 
 export function getNormalizedItem(db: PipelineDatabase, itemId: string): NormalizedItemRecord | undefined {
@@ -135,6 +163,7 @@ export function saveImageAnalysis(db: PipelineDatabase, record: ImageAnalysisRec
     captionText: record.captionText ?? null,
     ocrText: record.ocrText ?? null,
   });
+  refreshLexicalIndexForItem(db, record.itemId);
 }
 
 export function getImageAnalysis(db: PipelineDatabase, imageKey: string): ImageAnalysisRecord | undefined {
@@ -153,6 +182,7 @@ export function saveStructuredItem(db: PipelineDatabase, record: StructuredItemR
       structured_json = excluded.structured_json,
       updated_at = excluded.updated_at
   `).run(record);
+  refreshLexicalIndexForItem(db, record.itemId);
 }
 
 export function getStructuredItem(db: PipelineDatabase, itemId: string): StructuredItemRecord | undefined {
@@ -203,4 +233,107 @@ export function getImageEmbedding(db: PipelineDatabase, imageKey: string, embedd
 
 export function listImageEmbeddingsBySpace(db: PipelineDatabase, embeddingSpace: string) {
   return db.prepare(`SELECT image_key as imageKey, embedding_space as embeddingSpace, model, vector_json as vectorJson, updated_at as updatedAt FROM image_embeddings WHERE embedding_space = ?`).all(embeddingSpace) as { imageKey: string; embeddingSpace: string; model: string; vectorJson: string; updatedAt: string }[];
+}
+
+export function getLexicalDocument(db: PipelineDatabase, itemId: string): LexicalDocumentRecord | undefined {
+  return db.prepare(`
+    SELECT
+      item_id as itemId,
+      title,
+      description,
+      tags,
+      normalized_text as normalizedText,
+      shop_name as shopName,
+      category_name as categoryName,
+      parent_category_name as parentCategoryName,
+      price_text as priceText,
+      caption_text as captionText,
+      ocr_text as ocrText,
+      parts,
+      styles,
+      compatibility_hints as compatibilityHints,
+      keyword_digest as keywordDigest
+    FROM item_lexical_documents
+    WHERE item_id = ?
+  `).get(itemId) as LexicalDocumentRecord | undefined;
+}
+
+export function listLexicalDocuments(db: PipelineDatabase): LexicalDocumentRecord[] {
+  return db.prepare(`
+    SELECT
+      item_id as itemId,
+      title,
+      description,
+      tags,
+      normalized_text as normalizedText,
+      shop_name as shopName,
+      category_name as categoryName,
+      parent_category_name as parentCategoryName,
+      price_text as priceText,
+      caption_text as captionText,
+      ocr_text as ocrText,
+      parts,
+      styles,
+      compatibility_hints as compatibilityHints,
+      keyword_digest as keywordDigest
+    FROM item_lexical_documents
+    ORDER BY item_id ASC
+  `).all() as LexicalDocumentRecord[];
+}
+
+function upsertLexicalDocument(db: PipelineDatabase, document: LexicalDocumentRecord): void {
+  db.prepare(`DELETE FROM item_lexical_fts WHERE item_id = ?`).run(document.itemId);
+  db.prepare(`
+    INSERT INTO item_lexical_fts (
+      item_id,
+      title,
+      description,
+      tags,
+      normalized_text,
+      shop_name,
+      category_name,
+      parent_category_name,
+      price_text,
+      caption_text,
+      ocr_text,
+      parts,
+      styles,
+      compatibility_hints,
+      keyword_digest
+    ) VALUES (
+      @itemId,
+      @title,
+      @description,
+      @tags,
+      @normalizedText,
+      @shopName,
+      @categoryName,
+      @parentCategoryName,
+      @priceText,
+      @captionText,
+      @ocrText,
+      @parts,
+      @styles,
+      @compatibilityHints,
+      @keywordDigest
+    )
+  `).run(document);
+}
+
+export function refreshLexicalIndexForItem(db: PipelineDatabase, itemId: string): void {
+  db.prepare(`DELETE FROM item_lexical_fts WHERE item_id = ?`).run(itemId);
+  const document = getLexicalDocument(db, itemId);
+  if (!document) {
+    return;
+  }
+  upsertLexicalDocument(db, document);
+}
+
+export function rebuildLexicalIndex(db: PipelineDatabase): number {
+  db.prepare(`DELETE FROM item_lexical_fts`).run();
+  const documents = listLexicalDocuments(db);
+  for (const document of documents) {
+    upsertLexicalDocument(db, document);
+  }
+  return documents.length;
 }
