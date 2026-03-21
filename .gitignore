@@ -33,3 +33,5 @@ cache/
 *.sqlite3
 
 *.traineddata
+
+.worktrees/
