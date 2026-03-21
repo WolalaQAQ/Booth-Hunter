@@ -150,6 +150,10 @@ export function listNormalizedItems(db: PipelineDatabase, limit = 100): Normaliz
   return db.prepare(`SELECT item_id as itemId, normalized_json as normalizedJson, content_hash as contentHash, updated_at as updatedAt FROM normalized_items ORDER BY updated_at DESC LIMIT ?`).all(limit) as NormalizedItemRecord[];
 }
 
+export function listAllNormalizedItems(db: PipelineDatabase): NormalizedItemRecord[] {
+  return db.prepare(`SELECT item_id as itemId, normalized_json as normalizedJson, content_hash as contentHash, updated_at as updatedAt FROM normalized_items ORDER BY item_id ASC`).all() as NormalizedItemRecord[];
+}
+
 export function saveImageAnalysis(db: PipelineDatabase, record: ImageAnalysisRecord): void {
   db.prepare(`
     INSERT INTO image_analysis (image_key, item_id, image_index, caption_text, ocr_text, updated_at)
