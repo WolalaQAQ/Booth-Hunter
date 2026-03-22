@@ -1,3 +1,19 @@
+## [0.2.3] - 2026-03-22
+### Features
+- Added shared async/progress helpers plus tqdm-style terminal progress reporting for `sync:run` and the `knowledge:*` local pipeline scripts.
+- Added `skip-existing`, concurrency, chunking, primary-image filtering, and richer runtime summary options across caption/OCR/extract/text-embed/image-embed flows.
+- Upgraded the Python Qwen bridge and TypeScript embedding provider to probe runtime attention support, fail fast on unsupported requested backends, and surface inner embedding progress back to the main stage progress output.
+- Ignored `docs/superpowers` in the repo root `.gitignore` so temporary workflow artifacts stay out of commits.
+
+### Design Rationale
+- Long-running local Booth-Hunter jobs need visible real-time progress and resumable behavior so the user can tell whether a run is healthy before waiting on large batches.
+- Attention-backend validation should happen before expensive embedding work starts, especially when `flash_attention_2` is expected in the configured Python environment.
+- Shared helpers reduce duplication across the local-first pipeline surface and make future stage hardening easier.
+
+### Notes & Caveats
+- The embedding scripts now report both the requested and resolved attention backend; `--attn-implementation=auto` remains available when environment-specific fallback is needed.
+- `skip-existing` progress is counted explicitly, but the exact skip/processed mix still depends on the current local SQLite state and the selected crawl limit.
+
 ## [0.2.2] - 2026-03-21
 ### Features
 - Reprioritized the roadmap so Booth-Hunter now first hardens the **Goals 1/2/3 pipelines and performance** before treating **Goal 4 finished-model reverse search** as an active implementation target.

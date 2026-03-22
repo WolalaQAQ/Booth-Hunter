@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import unicodedata
+import importlib.util
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Union
@@ -18,6 +19,7 @@ import torch.nn.functional as F
 from PIL import Image
 from qwen_vl_utils.vision_process import process_vision_info
 from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
+from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 from transformers.cache_utils import Cache
 from transformers.modeling_outputs import ModelOutput
 from transformers.models.qwen3_vl.modeling_qwen3_vl import (
@@ -32,6 +34,12 @@ IMAGE_BASE_FACTOR = 16
 IMAGE_FACTOR = IMAGE_BASE_FACTOR * 2
 MIN_PIXELS = 4 * IMAGE_FACTOR * IMAGE_FACTOR
 MAX_PIXELS = 1800 * IMAGE_FACTOR * IMAGE_FACTOR
+
+
+def _chunk(items, batch_size: int):
+    safe_batch_size = max(1, int(batch_size))
+    for index in range(0, len(items), safe_batch_size):
+        yield items[index : index + safe_batch_size]
 
 
 def _read_payload():
@@ -49,6 +57,78 @@ def _torch_dtype(device: str):
     if device.startswith("cuda"):
         return torch.bfloat16
     return torch.float32
+
+
+def _configure_torch_backends(device: str):
+    if device.startswith("cuda"):
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
+
+def _flash_attention_available() -> bool:
+    return importlib.util.find_spec("flash_attn") is not None
+
+
+def _xformers_available() -> bool:
+    return importlib.util.find_spec("xformers") is not None
+
+
+def _supported_attention_implementations() -> List[str]:
+    try:
+        valid_keys = list(ALL_ATTENTION_FUNCTIONS.valid_keys())
+    except Exception:
+        valid_keys = ["sdpa", "flash_attention_2", "flash_attention_3", "flex_attention"]
+    return ["eager", *valid_keys]
+
+
+def _resolve_attn_implementation(payload, device: str):
+    requested = payload.get("attnImplementation") or os.environ.get("EMBED_ATTN_IMPLEMENTATION") or "flash_attention_2"
+    requested = str(requested)
+    if requested == "auto":
+        if device.startswith("cuda") and _flash_attention_available():
+            return "flash_attention_2"
+        return "sdpa" if device.startswith("cuda") else "eager"
+
+    return requested
+
+
+def _attention_runtime_info(payload):
+    device = _device(payload)
+    requested = payload.get("attnImplementation") or os.environ.get("EMBED_ATTN_IMPLEMENTATION") or "flash_attention_2"
+    requested = str(requested)
+    supported = _supported_attention_implementations()
+    flash_available = _flash_attention_available()
+    xformers_available = _xformers_available()
+    resolved = _resolve_attn_implementation(payload, device)
+    unsupported_reason = None
+
+    if requested == "flash_attention_2" and not (device.startswith("cuda") and flash_available):
+        resolved = None
+        unsupported_reason = "flash_attn is not installed or not available for flash_attention_2."
+    elif requested == "xformers":
+        resolved = None
+        if xformers_available:
+            unsupported_reason = (
+                "xformers is installed, but current transformers/Qwen3-VL does not support it as attn_implementation."
+            )
+        else:
+            unsupported_reason = "xformers is not installed in the embedding environment."
+    elif requested != "auto" and requested not in supported:
+        resolved = None
+        unsupported_reason = f"{requested} is not a supported attention backend in the current transformers runtime."
+
+    return {
+        "python": sys.executable,
+        "flashAttentionAvailable": flash_available,
+        "xformersAvailable": xformers_available,
+        "cudaAvailable": torch.cuda.is_available(),
+        "torchVersion": torch.__version__,
+        "device": device,
+        "requestedAttentionImplementation": requested,
+        "resolvedAttentionImplementation": resolved,
+        "supportedAttentionImplementations": supported,
+        "unsupportedAttentionReason": unsupported_reason,
+    }
 
 
 @dataclass
@@ -105,6 +185,7 @@ class Qwen3VLEmbedder:
         self,
         model_name_or_path: str,
         device: str,
+        attn_implementation: str,
         max_length: int = MAX_LENGTH,
         instruction: Optional[str] = None,
         min_pixels: int = MIN_PIXELS,
@@ -115,10 +196,14 @@ class Qwen3VLEmbedder:
         self.instruction = instruction or "Represent the input for multimodal retrieval."
         self.min_pixels = min_pixels
         self.max_pixels = max_pixels
+        self.attn_implementation = attn_implementation
+        _configure_torch_backends(device)
         self.model = Qwen3VLForEmbedding.from_pretrained(
             model_name_or_path,
             trust_remote_code=True,
             torch_dtype=_torch_dtype(device),
+            attn_implementation=attn_implementation,
+            low_cpu_mem_usage=True,
         ).to(self.device)
         self.processor = Qwen3VLProcessor.from_pretrained(
             model_name_or_path,
@@ -221,6 +306,7 @@ class Qwen3VLReranker:
         self,
         model_name_or_path: str,
         device: str,
+        attn_implementation: str,
         max_length: int = MAX_LENGTH,
         instruction: Optional[str] = None,
         min_pixels: int = MIN_PIXELS,
@@ -231,10 +317,13 @@ class Qwen3VLReranker:
         self.instruction = instruction or "Judge whether the BOOTH candidate item matches the query."
         self.min_pixels = min_pixels
         self.max_pixels = max_pixels
+        _configure_torch_backends(device)
         self.model = Qwen3VLForConditionalGeneration.from_pretrained(
             model_name_or_path,
             trust_remote_code=True,
             torch_dtype=_torch_dtype(device),
+            attn_implementation=attn_implementation,
+            low_cpu_mem_usage=True,
         ).to(self.device)
         self.processor = AutoProcessor.from_pretrained(
             model_name_or_path,
@@ -325,13 +414,27 @@ class Qwen3VLReranker:
 
 
 @lru_cache(maxsize=4)
-def _load_embedder(model_id: str, device: str):
-    return Qwen3VLEmbedder(model_id, device=device)
+def _load_embedder(model_id: str, device: str, attn_implementation: str, max_length: int, min_pixels: int, max_pixels: int):
+    return Qwen3VLEmbedder(
+        model_id,
+        device=device,
+        attn_implementation=attn_implementation,
+        max_length=max_length,
+        min_pixels=min_pixels,
+        max_pixels=max_pixels,
+    )
 
 
 @lru_cache(maxsize=2)
-def _load_reranker(model_id: str, device: str):
-    return Qwen3VLReranker(model_id, device=device)
+def _load_reranker(model_id: str, device: str, attn_implementation: str, max_length: int, min_pixels: int, max_pixels: int):
+    return Qwen3VLReranker(
+        model_id,
+        device=device,
+        attn_implementation=attn_implementation,
+        max_length=max_length,
+        min_pixels=min_pixels,
+        max_pixels=max_pixels,
+    )
 
 
 def _emit(model: str, embedding_space: str, vectors):
@@ -364,14 +467,41 @@ def _emit_rerank(model: str, scores):
     )
 
 
+def _emit_runtime_info(payload):
+    sys.stdout.write(json.dumps(_attention_runtime_info(payload), ensure_ascii=False))
+
+
+def _emit_progress(label: str, completed: int, total: int):
+    sys.stderr.write(f"{label} {completed}/{total}\n")
+    sys.stderr.flush()
+
+
+def qwen_env():
+    payload = _read_payload()
+    _emit_runtime_info(payload)
+
+
 def qwen_embed():
     payload = _read_payload()
     model_id = payload["modelId"]
     embedding_space = payload["embeddingSpace"]
     inputs = payload["inputs"]
+    batch_size = int(payload.get("batchSize") or 4)
+    progress_label = payload.get("progressLabel") or "qwen-embed"
     device = _device(payload)
-    embedder = _load_embedder(model_id, device)
-    vectors = embedder.process(inputs)
+    max_length = int(payload.get("maxLength") or MAX_LENGTH)
+    min_pixels = int(payload.get("minPixels") or MIN_PIXELS)
+    max_pixels = int(payload.get("maxPixels") or MAX_PIXELS)
+    attn_implementation = _resolve_attn_implementation(payload, device)
+    embedder = _load_embedder(model_id, device, attn_implementation, max_length, min_pixels, max_pixels)
+    vectors = []
+    total = len(inputs)
+    completed = 0
+    for batch in _chunk(inputs, batch_size):
+        batch_vectors = embedder.process(batch)
+        vectors.extend(batch_vectors.detach().cpu())
+        completed += len(batch)
+        _emit_progress(progress_label, completed, total)
     _emit(model_id, embedding_space, vectors)
 
 
@@ -382,12 +512,17 @@ def qwen_rerank():
     documents = payload["documents"]
     instruction = payload.get("instruction")
     device = _device(payload)
-    reranker = _load_reranker(model_id, device)
+    max_length = int(payload.get("maxLength") or MAX_LENGTH)
+    min_pixels = int(payload.get("minPixels") or MIN_PIXELS)
+    max_pixels = int(payload.get("maxPixels") or MAX_PIXELS)
+    attn_implementation = _resolve_attn_implementation(payload, device)
+    reranker = _load_reranker(model_id, device, attn_implementation, max_length, min_pixels, max_pixels)
     scores = reranker.score(query, documents, instruction=instruction)
     _emit_rerank(model_id, scores)
 
 
 COMMANDS = {
+    "qwen-env": qwen_env,
     "qwen-embed": qwen_embed,
     "qwen-rerank": qwen_rerank,
 }
@@ -395,7 +530,7 @@ COMMANDS = {
 
 def main():
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
-        raise SystemExit("Usage: embed_models.py <qwen-embed|qwen-rerank>")
+        raise SystemExit("Usage: embed_models.py <qwen-env|qwen-embed|qwen-rerank>")
     COMMANDS[sys.argv[1]]()
 
 
