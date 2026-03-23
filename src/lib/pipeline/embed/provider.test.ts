@@ -288,7 +288,6 @@ test("python embedding provider exposes runtime info including resolved attentio
       return JSON.stringify({
         python: "python",
         flashAttentionAvailable: false,
-        xformersAvailable: true,
         cudaAvailable: true,
         torchVersion: "2.6.0",
         requestedAttentionImplementation: "auto",
@@ -303,7 +302,6 @@ test("python embedding provider exposes runtime info including resolved attentio
   assert.deepEqual(runtimeInfo, {
     python: "python",
     flashAttentionAvailable: false,
-    xformersAvailable: true,
     cudaAvailable: true,
     torchVersion: "2.6.0",
     requestedAttentionImplementation: "auto",
@@ -312,26 +310,48 @@ test("python embedding provider exposes runtime info including resolved attentio
   });
 });
 
-test("python embedding provider fails fast when xformers is requested but unsupported by transformers", async () => {
+test("python embedding provider reuses a single persistent session across multiple embedding calls", async () => {
+  const commands: string[] = [];
+  let createdSessions = 0;
+  let disposedSessions = 0;
+
   const provider = createPythonEmbeddingProvider({
-    attnImplementation: "xformers",
-    runner: async ({ args }) => {
-      assert.equal(args[1], "qwen-env");
-      return JSON.stringify({
-        python: "python",
-        flashAttentionAvailable: false,
-        xformersAvailable: true,
-        cudaAvailable: true,
-        torchVersion: "2.6.0",
-        requestedAttentionImplementation: "xformers",
-        resolvedAttentionImplementation: undefined,
-        supportedAttentionImplementations: ["eager", "sdpa", "flash_attention_2"],
-        unsupportedAttentionReason:
-          "xformers is installed, but current transformers/Qwen3-VL does not support it as attn_implementation.",
-      });
+    sessionFactory: () => {
+      createdSessions += 1;
+      return {
+        async invoke({ commandName, onStderr }) {
+          commands.push(commandName);
+          if (commandName === "qwen-env") {
+            return JSON.stringify({
+              python: "python",
+              flashAttentionAvailable: true,
+              cudaAvailable: true,
+              torchVersion: "2.6.0",
+            });
+          }
+
+          onStderr?.("qwen-embed 1/1\n");
+          return JSON.stringify({
+            model: "Qwen/Qwen3-VL-Embedding-2B",
+            embeddingSpace: MULTIMODAL_SHARED_SPACE,
+            vectors: [[0.42, 0.24]],
+          });
+        },
+        async dispose() {
+          disposedSessions += 1;
+        },
+      };
     },
   });
 
-  await assert.rejects(() => provider.embedTexts(["test query"]), /xformers.*not support/i);
+  const first = await provider.embedTexts(["first"]);
+  const second = await provider.embedTexts(["second"]);
+  await provider.dispose();
+
+  assert.equal(first.vectors.length, 1);
+  assert.equal(second.vectors.length, 1);
+  assert.equal(createdSessions, 1);
+  assert.equal(disposedSessions, 1);
+  assert.deepEqual(commands, ["qwen-env", "qwen-embed", "qwen-embed"]);
 });
 

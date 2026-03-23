@@ -31,6 +31,27 @@ export type PythonRunnerInput = {
 
 export type PythonRunner = (input: PythonRunnerInput) => Promise<string>;
 
+export type PythonCommandName = "qwen-env" | "qwen-embed" | "qwen-rerank";
+
+export type PythonSessionInvokeInput = {
+  commandName: PythonCommandName;
+  payload: Record<string, unknown>;
+  onStderr?: (text: string) => void;
+};
+
+export type PythonSession = {
+  invoke(input: PythonSessionInvokeInput): Promise<string>;
+  dispose(): Promise<void>;
+};
+
+export type PythonSessionFactoryOptions = {
+  pythonBin: string;
+  scriptPath: string;
+  stderrWriter: (text: string) => void;
+};
+
+export type PythonSessionFactory = (options: PythonSessionFactoryOptions) => PythonSession;
+
 export type MultimodalInput = {
   text?: string;
   image?: string;
@@ -40,7 +61,6 @@ export type MultimodalInput = {
 export type PythonRuntimeInfo = {
   python?: string;
   flashAttentionAvailable?: boolean;
-  xformersAvailable?: boolean;
   cudaAvailable?: boolean;
   torchVersion?: string;
   requestedAttentionImplementation?: string;
@@ -61,6 +81,7 @@ export type PythonEmbeddingProviderOptions = {
   imageMinPixels?: number;
   imageMaxPixels?: number;
   runner?: PythonRunner;
+  sessionFactory?: PythonSessionFactory;
   onEmbeddingProgress?: (progress: { label: string; completed: number; total: number }) => void;
   stderrWriter?: (text: string) => void;
 };
@@ -113,6 +134,201 @@ function parseRerankResponse(stdout: string): RerankResponse {
   return parsed;
 }
 
+function createRunnerSession(
+  runner: PythonRunner,
+  options: {
+    pythonBin: string;
+    scriptPath: string;
+  }
+): PythonSession {
+  return {
+    async invoke(input: PythonSessionInvokeInput) {
+      return await runner({
+        command: options.pythonBin,
+        args: [options.scriptPath, input.commandName],
+        stdin: JSON.stringify(input.payload),
+        onStderr: input.onStderr,
+      });
+    },
+    async dispose() {},
+  };
+}
+
+function createPersistentPythonSession(options: PythonSessionFactoryOptions): PythonSession {
+  let child:
+    | ReturnType<typeof spawn>
+    | undefined;
+  let disposed = false;
+  let nextRequestId = 0;
+  let stdoutBuffer = Buffer.alloc(0);
+  let expectedResponseBytes: number | undefined;
+  const pending = new Map<
+    number,
+    {
+      resolve: (stdout: string) => void;
+      reject: (error: Error) => void;
+      onStderr?: (text: string) => void;
+    }
+  >();
+  const pendingOrder: number[] = [];
+
+  function rejectPending(error: Error) {
+    for (const requestId of pendingOrder.splice(0)) {
+      const entry = pending.get(requestId);
+      pending.delete(requestId);
+      entry?.reject(error);
+    }
+  }
+
+  function activeStderrHandler() {
+    const activeRequestId = pendingOrder[0];
+    if (activeRequestId === undefined) {
+      return undefined;
+    }
+    return pending.get(activeRequestId)?.onStderr;
+  }
+
+  function handleWorkerMessage(message: {
+    id?: number;
+    ok?: boolean;
+    result?: unknown;
+    error?: { message?: string };
+  }) {
+    const requestId = Number(message.id);
+    const entry = pending.get(requestId);
+    if (!entry) {
+      return;
+    }
+    pending.delete(requestId);
+    const orderIndex = pendingOrder.indexOf(requestId);
+    if (orderIndex >= 0) {
+      pendingOrder.splice(orderIndex, 1);
+    }
+
+    if (message.ok) {
+      entry.resolve(JSON.stringify(message.result ?? null));
+      return;
+    }
+
+    entry.reject(new Error(message.error?.message || "Python worker request failed"));
+  }
+
+  function handleStdout(chunk: Buffer) {
+    stdoutBuffer = Buffer.concat([stdoutBuffer, chunk]);
+
+    while (true) {
+      if (expectedResponseBytes === undefined) {
+        const newlineIndex = stdoutBuffer.indexOf(0x0a);
+        if (newlineIndex < 0) {
+          return;
+        }
+        const header = stdoutBuffer.slice(0, newlineIndex).toString("utf8").trim();
+        stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+        if (!header) {
+          continue;
+        }
+        expectedResponseBytes = Number(header);
+        if (!Number.isFinite(expectedResponseBytes) || expectedResponseBytes < 0) {
+          rejectPending(new Error(`Invalid Python worker frame length: ${header}`));
+          expectedResponseBytes = undefined;
+          return;
+        }
+      }
+
+      if (stdoutBuffer.length < expectedResponseBytes) {
+        return;
+      }
+
+      const rawMessage = stdoutBuffer.slice(0, expectedResponseBytes).toString("utf8");
+      stdoutBuffer = stdoutBuffer.slice(expectedResponseBytes);
+      expectedResponseBytes = undefined;
+
+      try {
+        handleWorkerMessage(JSON.parse(rawMessage));
+      } catch (error) {
+        rejectPending(new Error(`Failed to parse Python worker response: ${(error as Error).message}`));
+        return;
+      }
+    }
+  }
+
+  function ensureChild() {
+    if (disposed) {
+      throw new Error("Python embedding session has already been disposed.");
+    }
+    if (child) {
+      return child;
+    }
+
+    child = spawn(options.pythonBin, ["-u", options.scriptPath, "qwen-worker"], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    child.stdout.on("data", (data) => {
+      handleStdout(data as Buffer);
+    });
+    child.stderr.on("data", (data) => {
+      const text = data.toString();
+      const onStderr = activeStderrHandler();
+      if (onStderr) {
+        onStderr(text);
+        return;
+      }
+      options.stderrWriter(text);
+    });
+    child.on("error", (error) => {
+      rejectPending(error instanceof Error ? error : new Error(String(error)));
+    });
+    child.on("close", (code, signal) => {
+      if (disposed && pending.size === 0) {
+        return;
+      }
+      rejectPending(new Error(`Python embedding worker exited unexpectedly (code=${code}, signal=${signal || "none"}).`));
+      child = undefined;
+    });
+
+    return child;
+  }
+
+  return {
+    async invoke(input: PythonSessionInvokeInput) {
+      const currentChild = ensureChild();
+      return await new Promise<string>((resolve, reject) => {
+        const requestId = nextRequestId++;
+        pending.set(requestId, { resolve, reject, onStderr: input.onStderr });
+        pendingOrder.push(requestId);
+        const rawRequest = Buffer.from(
+          JSON.stringify({
+            id: requestId,
+            command: input.commandName,
+            payload: input.payload,
+          }),
+          "utf8"
+        );
+        currentChild.stdin.write(Buffer.concat([Buffer.from(`${rawRequest.length}\n`, "utf8"), rawRequest]));
+      });
+    },
+    async dispose() {
+      disposed = true;
+      if (!child) {
+        return;
+      }
+
+      const currentChild = child;
+      child = undefined;
+      rejectPending(new Error("Python embedding session was disposed."));
+
+      if (currentChild.exitCode !== null) {
+        return;
+      }
+
+      await new Promise<void>((resolve) => {
+        currentChild.once("close", () => resolve());
+        currentChild.kill();
+      });
+    },
+  };
+}
+
 function parseRuntimeInfoResponse(stdout: string): PythonRuntimeInfo {
   const parsed = JSON.parse(stdout) as PythonRuntimeInfo;
   if (!parsed || typeof parsed !== "object") {
@@ -123,7 +339,6 @@ function parseRuntimeInfoResponse(stdout: string): PythonRuntimeInfo {
 
 export function createPythonEmbeddingProvider(options: PythonEmbeddingProviderOptions = {}) {
   loadLocalEnv();
-  const runner = options.runner || execPython;
   const pythonBin = options.pythonBin || process.env.EMBED_PYTHON_BIN || "python";
   const scriptPath = options.scriptPath || process.env.EMBED_SCRIPT_PATH || defaultScriptPath();
   const device = options.device || process.env.EMBED_DEVICE || "cuda";
@@ -135,6 +350,22 @@ export function createPythonEmbeddingProvider(options: PythonEmbeddingProviderOp
   const imageMinPixels = options.imageMinPixels || Number(process.env.EMBED_IMAGE_MIN_PIXELS || `${4096}`);
   const imageMaxPixels = options.imageMaxPixels || Number(process.env.EMBED_IMAGE_MAX_PIXELS || `${1843200}`);
   const stderrWriter = options.stderrWriter || ((text: string) => process.stderr.write(text));
+  const session =
+    options.sessionFactory?.({
+      pythonBin,
+      scriptPath,
+      stderrWriter,
+    }) ||
+    (options.runner
+      ? createRunnerSession(options.runner, {
+          pythonBin,
+          scriptPath,
+        })
+      : createPersistentPythonSession({
+          pythonBin,
+          scriptPath,
+          stderrWriter,
+        }));
   let runtimeInfoPromise: Promise<PythonRuntimeInfo> | undefined;
 
   function buildStderrHandler(commandName: string) {
@@ -172,10 +403,9 @@ export function createPythonEmbeddingProvider(options: PythonEmbeddingProviderOp
   }
 
   async function invoke(commandName: string, payload: Record<string, unknown>) {
-    return await runner({
-      command: pythonBin,
-      args: [scriptPath, commandName],
-      stdin: JSON.stringify(payload),
+    return await session.invoke({
+      commandName: commandName as PythonCommandName,
+      payload,
       onStderr: buildStderrHandler(commandName),
     });
   }
@@ -210,15 +440,6 @@ export function createPythonEmbeddingProvider(options: PythonEmbeddingProviderOp
         `Requested flash_attention_2, but flash_attn is not installed or not available${location}. ` +
           `Install flash-attn in the embedding environment or rerun with --attn-implementation=auto|sdpa.`
       );
-    }
-
-    if (attnImplementation === "xformers") {
-      const location = runtimeInfo.python ? ` in ${runtimeInfo.python}` : "";
-      const supported = runtimeInfo.supportedAttentionImplementations?.join(", ") || "eager, sdpa";
-      const detail =
-        runtimeInfo.unsupportedAttentionReason ||
-        "xformers is installed, but the current transformers/Qwen3-VL stack does not support it as attn_implementation.";
-      throw new Error(`${detail}${location} Supported backends: ${supported}.`);
     }
 
     if (
@@ -292,6 +513,9 @@ export function createPythonEmbeddingProvider(options: PythonEmbeddingProviderOp
       }
 
       return response;
+    },
+    async dispose() {
+      await session.dispose();
     },
   };
 }

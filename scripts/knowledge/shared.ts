@@ -5,10 +5,31 @@ import {
   type ProgressPostfixField,
 } from "../../src/lib/utils/progress";
 
+function parseArgumentName(value: string): string | undefined {
+  if (!value.startsWith("--")) {
+    return undefined;
+  }
+  const withoutPrefix = value.slice(2);
+  const separatorIndex = withoutPrefix.indexOf("=");
+  return separatorIndex >= 0 ? withoutPrefix.slice(0, separatorIndex) : withoutPrefix;
+}
+
 export function argument(name: string, fallback?: string): string | undefined {
   const prefixed = `--${name}=`;
   const match = process.argv.find((value) => value.startsWith(prefixed));
   return match ? match.slice(prefixed.length) : fallback;
+}
+
+export function assertKnownArguments(allowedNames: string[]) {
+  const allowed = new Set(allowedNames);
+  const unknown = process.argv
+    .map((value) => parseArgumentName(value))
+    .filter((value): value is string => Boolean(value))
+    .filter((value) => !allowed.has(value));
+
+  if (unknown.length > 0) {
+    throw new Error(`Unknown arguments: ${unknown.map((name) => `--${name}`).join(", ")}`);
+  }
 }
 
 export function numberArgument(name: string, fallback: number): number {

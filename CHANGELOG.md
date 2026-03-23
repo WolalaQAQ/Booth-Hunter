@@ -1,3 +1,19 @@
+## [0.2.4] - 2026-03-23
+### Features
+- Reworked the local embedding pipeline so `knowledge:embed-text` and `knowledge:embed-images` now keep a single persistent Python Qwen worker alive across batches instead of respawning Python for each request.
+- Split embedding inference from SQLite persistence with a dedicated writer process and a bounded pending-save queue, so inference can continue while earlier batches are being written.
+- Removed the misleading `chunk-size` path and kept only explicit `provider-batch-size`, `save-batch-size`, and `max-pending-save-batches` controls for the embedding scripts.
+- Simplified embedding progress output to focus on actionable pipeline state (`inferred`, `saved`, queue backlog, and timing) instead of runtime capability diagnostics.
+
+### Design Rationale
+- The previous per-call Python process model reloaded model weights repeatedly and made large runs look stalled even when the model itself was healthy.
+- A separate writer process keeps the pipeline architecture clean: model throughput is constrained by GPU work, while SQLite persistence is handled independently with explicit backpressure.
+- Removing compatibility knobs and failed experiment residue keeps the Phase 1 pipeline easier to reason about and avoids accreting legacy behavior around embedding execution.
+
+### Notes & Caveats
+- `--chunk-size` is no longer accepted; embedding runs must use `--save-batch-size` for persistence granularity and `--provider-batch-size` for model inference granularity.
+- Verification smoke runs should continue to keep `--provider-batch-size <= 6` unless the user explicitly approves a larger batch.
+
 ## [0.2.3] - 2026-03-22
 ### Features
 - Added shared async/progress helpers plus tqdm-style terminal progress reporting for `sync:run` and the `knowledge:*` local pipeline scripts.

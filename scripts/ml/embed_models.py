@@ -49,6 +49,30 @@ def _read_payload():
     return json.loads(raw)
 
 
+def _write_json_line(payload):
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+def _write_worker_message(payload):
+    raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    sys.stdout.buffer.write(f"{len(raw)}\n".encode("utf-8"))
+    sys.stdout.buffer.write(raw)
+    sys.stdout.buffer.flush()
+
+
+def _read_worker_message():
+    header = sys.stdin.buffer.readline()
+    if not header:
+        return None
+
+    length = int(header.decode("utf-8").strip())
+    raw = sys.stdin.buffer.read(length)
+    if len(raw) != length:
+        raise ValueError(f"Expected {length} bytes from worker stdin, received {len(raw)}.")
+    return json.loads(raw.decode("utf-8"))
+
+
 def _device(payload):
     return payload.get("device") or os.environ.get("EMBED_DEVICE") or ("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -67,10 +91,6 @@ def _configure_torch_backends(device: str):
 
 def _flash_attention_available() -> bool:
     return importlib.util.find_spec("flash_attn") is not None
-
-
-def _xformers_available() -> bool:
-    return importlib.util.find_spec("xformers") is not None
 
 
 def _supported_attention_implementations() -> List[str]:
@@ -98,21 +118,12 @@ def _attention_runtime_info(payload):
     requested = str(requested)
     supported = _supported_attention_implementations()
     flash_available = _flash_attention_available()
-    xformers_available = _xformers_available()
     resolved = _resolve_attn_implementation(payload, device)
     unsupported_reason = None
 
     if requested == "flash_attention_2" and not (device.startswith("cuda") and flash_available):
         resolved = None
         unsupported_reason = "flash_attn is not installed or not available for flash_attention_2."
-    elif requested == "xformers":
-        resolved = None
-        if xformers_available:
-            unsupported_reason = (
-                "xformers is installed, but current transformers/Qwen3-VL does not support it as attn_implementation."
-            )
-        else:
-            unsupported_reason = "xformers is not installed in the embedding environment."
     elif requested != "auto" and requested not in supported:
         resolved = None
         unsupported_reason = f"{requested} is not a supported attention backend in the current transformers runtime."
@@ -120,7 +131,6 @@ def _attention_runtime_info(payload):
     return {
         "python": sys.executable,
         "flashAttentionAvailable": flash_available,
-        "xformersAvailable": xformers_available,
         "cudaAvailable": torch.cuda.is_available(),
         "torchVersion": torch.__version__,
         "device": device,
@@ -437,38 +447,13 @@ def _load_reranker(model_id: str, device: str, attn_implementation: str, max_len
     )
 
 
-def _emit(model: str, embedding_space: str, vectors):
+def _serialize_vectors(vectors):
     serializable = []
     for vector in vectors:
         if hasattr(vector, "tolist"):
             vector = vector.tolist()
         serializable.append(vector)
-    sys.stdout.write(
-        json.dumps(
-            {
-                "model": model,
-                "embeddingSpace": embedding_space,
-                "vectors": serializable,
-            },
-            ensure_ascii=False,
-        )
-    )
-
-
-def _emit_rerank(model: str, scores):
-    sys.stdout.write(
-        json.dumps(
-            {
-                "model": model,
-                "scores": [float(score) for score in scores],
-            },
-            ensure_ascii=False,
-        )
-    )
-
-
-def _emit_runtime_info(payload):
-    sys.stdout.write(json.dumps(_attention_runtime_info(payload), ensure_ascii=False))
+    return serializable
 
 
 def _emit_progress(label: str, completed: int, total: int):
@@ -476,13 +461,11 @@ def _emit_progress(label: str, completed: int, total: int):
     sys.stderr.flush()
 
 
-def qwen_env():
-    payload = _read_payload()
-    _emit_runtime_info(payload)
+def _qwen_env(payload):
+    return _attention_runtime_info(payload)
 
 
-def qwen_embed():
-    payload = _read_payload()
+def _qwen_embed(payload):
     model_id = payload["modelId"]
     embedding_space = payload["embeddingSpace"]
     inputs = payload["inputs"]
@@ -502,11 +485,14 @@ def qwen_embed():
         vectors.extend(batch_vectors.detach().cpu())
         completed += len(batch)
         _emit_progress(progress_label, completed, total)
-    _emit(model_id, embedding_space, vectors)
+    return {
+        "model": model_id,
+        "embeddingSpace": embedding_space,
+        "vectors": _serialize_vectors(vectors),
+    }
 
 
-def qwen_rerank():
-    payload = _read_payload()
+def _qwen_rerank(payload):
     model_id = payload["modelId"]
     query = payload["query"]
     documents = payload["documents"]
@@ -518,19 +504,74 @@ def qwen_rerank():
     attn_implementation = _resolve_attn_implementation(payload, device)
     reranker = _load_reranker(model_id, device, attn_implementation, max_length, min_pixels, max_pixels)
     scores = reranker.score(query, documents, instruction=instruction)
-    _emit_rerank(model_id, scores)
+    return {
+        "model": model_id,
+        "scores": [float(score) for score in scores],
+    }
+
+
+def qwen_env():
+    _write_json_line(_qwen_env(_read_payload()))
+
+
+def qwen_embed():
+    _write_json_line(_qwen_embed(_read_payload()))
+
+
+def qwen_rerank():
+    _write_json_line(_qwen_rerank(_read_payload()))
+
+
+def qwen_worker():
+    while True:
+        request = _read_worker_message()
+        if request is None:
+            break
+        request_id = request.get("id")
+        command = request.get("command")
+        payload = request.get("payload") or {}
+
+        try:
+            if command == "qwen-env":
+                result = _qwen_env(payload)
+            elif command == "qwen-embed":
+                result = _qwen_embed(payload)
+            elif command == "qwen-rerank":
+                result = _qwen_rerank(payload)
+            else:
+                raise ValueError(f"Unsupported worker command: {command}")
+
+            _write_worker_message(
+                {
+                    "id": request_id,
+                    "ok": True,
+                    "result": result,
+                }
+            )
+        except Exception as exc:
+            _write_worker_message(
+                {
+                    "id": request_id,
+                    "ok": False,
+                    "error": {
+                        "type": exc.__class__.__name__,
+                        "message": str(exc),
+                    },
+                }
+            )
 
 
 COMMANDS = {
     "qwen-env": qwen_env,
     "qwen-embed": qwen_embed,
     "qwen-rerank": qwen_rerank,
+    "qwen-worker": qwen_worker,
 }
 
 
 def main():
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
-        raise SystemExit("Usage: embed_models.py <qwen-env|qwen-embed|qwen-rerank>")
+        raise SystemExit("Usage: embed_models.py <qwen-env|qwen-embed|qwen-rerank|qwen-worker>")
     COMMANDS[sys.argv[1]]()
 
 

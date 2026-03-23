@@ -1,24 +1,30 @@
 import { performance } from 'node:perf_hooks';
 
-import { createPythonEmbeddingProvider, MULTIMODAL_SHARED_SPACE, PythonRuntimeInfo } from '../../src/lib/pipeline/embed/provider';
+import { runEmbeddingBatchPipeline, type EmbeddingBatchPipelineState } from '../../src/lib/pipeline/embed/pipeline';
+import { buildEmbeddingProgressPostfix } from '../../src/lib/pipeline/embed/scriptProgress';
+import { createPythonEmbeddingProvider, MULTIMODAL_SHARED_SPACE } from '../../src/lib/pipeline/embed/provider';
 import { filterPrimaryImageEntries } from '../../src/lib/pipeline/images/select';
-import { getImageEmbedding, listAllItemImages, openPipelineDatabase, saveImageEmbedding } from '../../src/lib/pipeline/sqlite/db';
+import { getImageEmbedding, listAllItemImages, openPipelineDatabase } from '../../src/lib/pipeline/sqlite/db';
+import { createEmbeddingWriter } from '../../src/lib/pipeline/sqlite/embeddingWriter';
 import {
   argument,
+  assertKnownArguments,
   booleanArgument,
-  chunk,
   createStageProgress,
   formatDurationMs,
   numberArgument,
-  type ProgressPostfixField,
 } from './shared';
 
 async function main() {
-  const db = openPipelineDatabase(argument('db', 'data/raw/booth-pipeline.sqlite')!);
+  const dbPath = argument('db', 'data/raw/booth-pipeline.sqlite')!;
+  assertKnownArguments(['db', 'primary-only', 'skip-existing', 'provider-batch-size', 'save-batch-size', 'max-pending-save-batches', 'attn-implementation', 'max-length', 'max-pixels']);
+
+  const db = openPipelineDatabase(dbPath);
   const primaryOnly = booleanArgument('primary-only', false);
   const skipExisting = booleanArgument('skip-existing', true);
-  const chunkSize = numberArgument('chunk-size', 32);
   const providerBatchSize = numberArgument('provider-batch-size', Number(process.env.EMBED_BATCH_SIZE || '4'));
+  const saveBatchSize = Math.max(1, numberArgument('save-batch-size', providerBatchSize));
+  const maxPendingSaveBatches = Math.max(1, numberArgument('max-pending-save-batches', 2));
   const attnImplementation = argument('attn-implementation', process.env.EMBED_ATTN_IMPLEMENTATION || 'flash_attention_2')!;
   const maxLength = numberArgument('max-length', Number(process.env.EMBED_MAX_LENGTH || '8192'));
   const imageMaxPixels = numberArgument('max-pixels', Number(process.env.EMBED_IMAGE_MAX_PIXELS || '1843200'));
@@ -42,33 +48,42 @@ async function main() {
     const progress = createStageProgress({ stage: 'embed-images', total: Math.max(1, total) });
     let completed = 0;
     let completedChunks = 0;
+    let activeInnerCompleted = 0;
     let totalInferenceMs = 0;
     let totalSaveMs = 0;
     let currentChunkStartedAt = 0;
     let currentFirstInnerProgressMs: number | undefined;
     let firstChunkWarmupMs: number | undefined;
-    let runtime: PythonRuntimeInfo = {};
+    let lastInferMs: number | undefined;
+    let lastSaveMs: number | undefined;
+    let pipelineState: EmbeddingBatchPipelineState = {
+      inferredCount: 0,
+      inferredBatches: 0,
+      savedCount: 0,
+      savedBatches: 0,
+      pendingSaveBatches: 0,
+      totalInferenceMs: 0,
+      totalSaveMs: 0,
+    };
 
-    function buildPostfix(): ProgressPostfixField[] {
-      const avgInferChunkMs = completedChunks > 0 ? totalInferenceMs / completedChunks : undefined;
-      const avgSaveChunkMs = completedChunks > 0 ? totalSaveMs / completedChunks : undefined;
-      return [
-        { label: 'queued', shortLabel: 'q', value: pending.length, priority: 100 },
-        { label: 'skipped', shortLabel: 'sk', value: skipped, priority: 95 },
-        { label: 'chunkSize', shortLabel: 'chunk', value: chunkSize, priority: 90 },
-        { label: 'providerBatchSize', shortLabel: 'pbs', value: providerBatchSize, priority: 85 },
-        { label: 'maxLen', shortLabel: 'len', value: maxLength, priority: 80 },
-        { label: 'maxPx', shortLabel: 'px', value: imageMaxPixels, priority: 75 },
-        { label: 'primaryOnly', shortLabel: 'p0', value: primaryOnly ? 'yes' : 'no', priority: 70 },
-        { label: 'prep', shortLabel: 'prep', value: formatDurationMs(prepareMs), priority: 65 },
-        { label: 'warmup', shortLabel: 'warm', value: formatDurationMs(currentFirstInnerProgressMs ?? firstChunkWarmupMs), priority: 60 },
-        { label: 'avgInfer', shortLabel: 'infer', value: formatDurationMs(avgInferChunkMs), priority: 55 },
-        { label: 'avgSave', shortLabel: 'save', value: formatDurationMs(avgSaveChunkMs), priority: 50 },
-        { label: 'requestedAttn', shortLabel: 'attn', value: attnImplementation, priority: 40 },
-        { label: 'resolvedAttn', shortLabel: 'rattn', value: runtime.resolvedAttentionImplementation || '-', priority: 35 },
-        { label: 'xformers', shortLabel: 'xf', value: runtime.xformersAvailable ? 'yes' : 'no', priority: 20 },
-        { label: 'flashAttn', shortLabel: 'fa', value: runtime.flashAttentionAvailable ? 'yes' : 'no', priority: 20 },
-      ];
+    function buildPostfix() {
+      return buildEmbeddingProgressPostfix({
+        remaining: Math.max(0, pending.length - pipelineState.inferredCount - activeInnerCompleted),
+        inferred: pipelineState.inferredCount + activeInnerCompleted,
+        saved: pipelineState.savedCount,
+        skipped,
+        pendingSaveBatches: pipelineState.pendingSaveBatches,
+        saveBatchSize,
+        providerBatchSize,
+        prepareMs,
+        warmupMs: currentFirstInnerProgressMs ?? firstChunkWarmupMs,
+        lastInferMs: pipelineState.lastInferMs ?? lastInferMs,
+        totalInferenceMs: pipelineState.totalInferenceMs,
+        completedInferBatches: pipelineState.inferredBatches,
+        lastSaveMs: pipelineState.lastSaveMs ?? lastSaveMs,
+        totalSaveMs: pipelineState.totalSaveMs,
+        completedSaveBatches: pipelineState.savedBatches,
+      });
     }
 
     const provider = createPythonEmbeddingProvider({
@@ -77,50 +92,69 @@ async function main() {
       maxLength,
       imageMaxPixels,
       onEmbeddingProgress: (inner) => {
+        activeInnerCompleted = inner.completed;
         if (currentChunkStartedAt > 0 && currentFirstInnerProgressMs === undefined && inner.completed > 0) {
           currentFirstInnerProgressMs = performance.now() - currentChunkStartedAt;
           firstChunkWarmupMs = firstChunkWarmupMs ?? currentFirstInnerProgressMs;
         }
-        progress.update(skipped + completed + inner.completed, buildPostfix());
+        progress.update(skipped + pipelineState.inferredCount + inner.completed, buildPostfix());
       },
     });
-    runtime = await provider.getRuntimeInfo();
+    const writer = createEmbeddingWriter({ dbPath });
 
     try {
       progress.update(skipped, buildPostfix());
 
-      for (const batch of chunk(pending, chunkSize)) {
-        currentChunkStartedAt = performance.now();
-        currentFirstInnerProgressMs = undefined;
-        const response = await provider.embedImages(batch.map((image) => image.sourceUrl));
-        totalInferenceMs += performance.now() - currentChunkStartedAt;
-
-        const saveStartedAt = performance.now();
-        for (const [index, image] of batch.entries()) {
-          saveImageEmbedding(db, {
-            imageKey: image.imageKey,
-            embeddingSpace: MULTIMODAL_SHARED_SPACE,
-            model: response.model,
-            vectorJson: JSON.stringify(response.vectors[index] || []),
-            updatedAt: new Date().toISOString(),
-          });
-        }
-        totalSaveMs += performance.now() - saveStartedAt;
-        completedChunks += 1;
-        completed += batch.length;
-        progress.update(skipped + completed, buildPostfix());
-      }
+      pipelineState = await runEmbeddingBatchPipeline({
+        items: pending,
+        batchSize: saveBatchSize,
+        maxPendingSaveBatches,
+        async embedBatch(batch) {
+          currentChunkStartedAt = performance.now();
+          currentFirstInnerProgressMs = undefined;
+          activeInnerCompleted = 0;
+          const response = await provider.embedImages(batch.map((image) => image.sourceUrl));
+          activeInnerCompleted = 0;
+          return response;
+        },
+        async saveBatch(batch, response) {
+          const updatedAt = new Date().toISOString();
+          return await writer.saveImageBatch(
+            batch.map((image, index) => ({
+              imageKey: image.imageKey,
+              embeddingSpace: MULTIMODAL_SHARED_SPACE,
+              model: response.model,
+              vectorJson: JSON.stringify(response.vectors[index] || []),
+              updatedAt,
+            }))
+          );
+        },
+        onState(state) {
+          pipelineState = state;
+          lastInferMs = state.lastInferMs ?? lastInferMs;
+          lastSaveMs = state.lastSaveMs ?? lastSaveMs;
+          totalInferenceMs = state.totalInferenceMs;
+          totalSaveMs = state.totalSaveMs;
+          completedChunks = state.savedBatches;
+          completed = state.savedCount;
+          progress.update(skipped + state.inferredCount + activeInnerCompleted, buildPostfix());
+        },
+      });
 
       progress.update(total, buildPostfix(), true);
     } finally {
       progress.dispose();
+      await writer.dispose();
+      await provider.dispose();
     }
     console.log(
-      `Image embeddings completed for ${images.length} item images. processed=${completed}, skipped=${skipped}, primaryOnly=${primaryOnly}, ` +
-        `chunkSize=${chunkSize}, providerBatchSize=${providerBatchSize}, requestedAttn=${attnImplementation}, resolvedAttn=${runtime.resolvedAttentionImplementation || "-"}, xformers=${runtime.xformersAvailable ? "yes" : "no"}, flashAttn=${runtime.flashAttentionAvailable ? "yes" : "no"}, maxLength=${maxLength}, maxPixels=${imageMaxPixels}, prepare=${formatDurationMs(prepareMs)}, ` +
-        `firstWarmup=${formatDurationMs(firstChunkWarmupMs)}, avgInferChunk=${formatDurationMs(
-          completedChunks > 0 ? totalInferenceMs / completedChunks : undefined
-        )}, avgSaveChunk=${formatDurationMs(completedChunks > 0 ? totalSaveMs / completedChunks : undefined)}.`
+      `Image embeddings completed for ${images.length} item images. processed=${pipelineState.savedCount}, inferred=${pipelineState.inferredCount}, skipped=${skipped}, primaryOnly=${primaryOnly}, ` +
+        `saveBatchSize=${saveBatchSize}, providerBatchSize=${providerBatchSize}, maxPendingSaveBatches=${maxPendingSaveBatches}, maxLength=${maxLength}, maxPixels=${imageMaxPixels}, prepare=${formatDurationMs(prepareMs)}, ` +
+        `firstWarmup=${formatDurationMs(firstChunkWarmupMs)}, lastInfer=${formatDurationMs(lastInferMs)}, avgInfer=${formatDurationMs(
+          pipelineState.inferredBatches > 0 ? pipelineState.totalInferenceMs / pipelineState.inferredBatches : undefined
+        )}, lastSave=${formatDurationMs(lastSaveMs)}, avgSave=${formatDurationMs(
+          pipelineState.savedBatches > 0 ? pipelineState.totalSaveMs / pipelineState.savedBatches : undefined
+        )}.`
     );
   } finally {
     db.close();
