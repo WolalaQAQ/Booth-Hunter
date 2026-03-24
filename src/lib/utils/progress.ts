@@ -126,6 +126,7 @@ export type TerminalProgressReporterOptions = {
 export type TerminalProgressRenderOptions = {
   forceLog?: boolean;
   final?: boolean;
+  logSnapshot?: TqdmProgressFormatOptions;
 };
 
 export function createTerminalProgressReporter(options: TerminalProgressReporterOptions = {}) {
@@ -217,7 +218,7 @@ export function createTerminalProgressReporter(options: TerminalProgressReporter
   return {
     renderProgress(snapshot: TqdmProgressFormatOptions, renderOptions: TerminalProgressRenderOptions = {}) {
       const timestamp = now();
-      const fullLine = formatTqdmProgress(snapshot);
+      const fullLine = formatTqdmProgress(renderOptions.logSnapshot || snapshot);
       const liveLine = formatTqdmProgress({ ...snapshot, columns: getColumns() });
       const shouldLog =
         renderOptions.forceLog ||

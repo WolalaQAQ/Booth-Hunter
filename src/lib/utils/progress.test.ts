@@ -206,3 +206,58 @@ test("createTerminalProgressReporter writes a final newline for completed tty pr
   assert.equal(logLines.length, 1);
   assert.match(logLines[0] || "", /^embed-images: /);
 });
+
+test("createTerminalProgressReporter can render a compact tty line while logging a fuller snapshot", () => {
+  const streamWrites: string[] = [];
+  const logLines: string[] = [];
+
+  const reporter = createTerminalProgressReporter({
+    isTTY: true,
+    checkpointIntervalMs: 0,
+    now: () => 100,
+    getColumns: () => 120,
+    clearLine: () => undefined,
+    cursorTo: () => undefined,
+    streamWriter: (message) => {
+      streamWrites.push(message);
+    },
+    logWriter: (message) => {
+      logLines.push(message);
+    },
+  });
+
+  reporter.renderProgress(
+    {
+      description: "embed-images",
+      completed: 2,
+      total: 4,
+      elapsedSeconds: 5,
+      postfix: [
+        { label: "inferred", value: 2 },
+        { label: "saved", value: 0 },
+      ],
+      barWidth: 10,
+    },
+    {
+      logSnapshot: {
+        description: "embed-images",
+        completed: 2,
+        total: 4,
+        elapsedSeconds: 5,
+        postfix: [
+          { label: "inferred", value: 2 },
+          { label: "saved", value: 0 },
+          { label: "downloadConcurrency", value: 8 },
+          { label: "providerBatchSize", value: 2 },
+        ],
+        barWidth: 10,
+      },
+    }
+  );
+
+  assert.equal(streamWrites.length, 1);
+  assert.equal(logLines.length, 1);
+  assert.doesNotMatch(streamWrites[0] || "", /downloadConcurrency|providerBatchSize/);
+  assert.match(logLines[0] || "", /downloadConcurrency 8/);
+  assert.match(logLines[0] || "", /providerBatchSize 2/);
+});

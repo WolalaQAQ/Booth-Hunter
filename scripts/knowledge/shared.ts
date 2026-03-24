@@ -83,17 +83,34 @@ export function createStageProgress(options: StageProgressOptions, runtimeOption
   const disposeConsoleBridge = reporter.installConsoleBridge();
 
   return {
-    update(completed: number, postfix: ProgressPostfixField[] = [], forceLog = false) {
+    update(
+      completed: number,
+      postfix: ProgressPostfixField[] = [],
+      forceLog = false,
+      logPostfix?: ProgressPostfixField[]
+    ) {
       const elapsedSeconds = Math.max(0, (now() - startedAt) / 1000);
+      const baseSnapshot = {
+        description: options.stage,
+        completed,
+        total: options.total,
+        elapsedSeconds,
+      };
       reporter.renderProgress(
         {
-          description: options.stage,
-          completed,
-          total: options.total,
-          elapsedSeconds,
+          ...baseSnapshot,
           postfix,
         },
-        { forceLog, final: forceLog }
+        {
+          forceLog,
+          final: forceLog,
+          logSnapshot: logPostfix
+            ? {
+                ...baseSnapshot,
+                postfix: logPostfix,
+              }
+            : undefined,
+        }
       );
 
       if (forceLog) {
